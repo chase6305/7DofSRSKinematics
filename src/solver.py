@@ -2,11 +2,14 @@ import typing
 from abc import ABCMeta, abstractmethod
 from itertools import product
 import logging
-import coloredlogs
+try:  # Pretty logging is optional; the solver itself only depends on NumPy.
+    import coloredlogs
 
-coloredlogs.install(
-    level="INFO", fmt="%(asctime)s,%(msecs)03d %(levelname)s %(message)s"
-)
+    coloredlogs.install(
+        level="INFO", fmt="%(asctime)s,%(msecs)03d %(levelname)s %(message)s"
+    )
+except ImportError:  # pragma: no cover - depends on the user's environment
+    logging.basicConfig(level=logging.INFO)
 
 import numpy as np
 
@@ -168,6 +171,7 @@ class Solver(ISolver):
             "dt": self._dt,
             "damp": self._damp,
             "num_samples": self._num_samples,
+            "is_only_position_constraint": self._is_only_position_constraint,
         }
 
     def set_ik_nearst_weight(
@@ -183,7 +187,13 @@ class Solver(ISolver):
         Returns:
             bool: True if the weights are set successfully, False otherwise.
         """
-        ik_weight = np.array(ik_weight)
+        ik_weight = np.asarray(ik_weight, dtype=float)
+        if ik_weight.ndim != 1 or not np.all(np.isfinite(ik_weight)):
+            logging.warning("ik_weight must be a finite one-dimensional array.")
+            return False
+        if np.any(ik_weight < 0.0):
+            logging.warning("ik_weight values must be non-negative.")
+            return False
 
         # Set joint_ids to all joint indices if it is None
         if joint_ids is None:
@@ -243,10 +253,17 @@ class Solver(ISolver):
             bool: True if limits are successfully set, False if the input is invalid.
         """
         if (
-            len(lower_position_limits) != self.model.nq
-            or len(upper_position_limits) != self.model.nq
+            len(lower_position_limits) != self.dof
+            or len(upper_position_limits) != self.dof
         ):
             logging.warning("Length of limits must match the number of joints.")
+            return False
+
+        if not (
+            np.all(np.isfinite(lower_position_limits))
+            and np.all(np.isfinite(upper_position_limits))
+        ):
+            logging.warning("Joint limits must be finite.")
             return False
 
         if any(
@@ -444,4 +461,12 @@ class Solver(ISolver):
             np.ndarray: The limited list of joint positions if the elbow is up,
                         otherwise returns the original list.
         """
-        pass
+        qpos = np.asarray(qpos_list, dtype=float)
+        if not self._is_elbow_up:
+            return qpos
+        if qpos.ndim == 1:
+            qpos = qpos.reshape(1, -1)
+        # Keep configurations whose elbow (the fourth revolute joint in an
+        # S-R-S chain) is on the requested positive branch.
+        limited = qpos[qpos[:, 3] >= 0.0]
+        return limited

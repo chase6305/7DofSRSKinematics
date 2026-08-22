@@ -1,21 +1,27 @@
 import numpy as np
 from srs_analytical_solver import SRSAnalyticalSolver
 import logging
-import coloredlogs
+from pathlib import Path
+try:
+    import coloredlogs
 
-coloredlogs.install(
-    level="INFO", fmt="%(asctime)s,%(msecs)03d %(levelname)s %(message)s"
-)
+    coloredlogs.install(
+        level="INFO", fmt="%(asctime)s,%(msecs)03d %(levelname)s %(message)s"
+    )
+except ImportError:  # pragma: no cover
+    logging.basicConfig(level=logging.INFO)
 
-__all__ = ["KUKAiiwaSolver"]
+__all__ = ["KUKAiiwa7R800Solver", "KUKAiiwaSolver"]
 
 
-class KUKAiiwaSolver(SRSAnalyticalSolver):
+class KUKAiiwa7R800Solver(SRSAnalyticalSolver):
     def __init__(
         self,
         **kwargs,
     ):
         half_pi = np.pi / 2
+        # Canonical SRS distances derived from the bundled iiwa7 R800 URDF:
+        # base-to-shoulder, upper arm, forearm, and wrist-to-TCP.
         self.link_lengths = np.array([0.34, 0.4, 0.4, 0.126])
 
         self.dh_params = np.array(
@@ -36,18 +42,24 @@ class KUKAiiwaSolver(SRSAnalyticalSolver):
         self.d_wt = self.link_lengths[3]
 
         self.lower_position_limits = np.radians(
-            [-180, -180, -180, -180, -180, -180, -180]
+            [-170, -120, -170, -120, -170, -120, -175]
         )
-        self.upper_position_limits = np.radians([180, 180, 180, 180, 180, 180, 180])
+        self.upper_position_limits = -self.lower_position_limits
 
         super().__init__(
-            urdf_path=None,
+            urdf_path=str(
+                Path(__file__).resolve().parents[1] / "urdf" / "iiwa_7.urdf"
+            ),
             end_link_name="link_ee",
             **kwargs,
         )
 
         self.flange_to_ee = np.eye(4)
         self.ik_nearst_weight = np.ones(7)
+
+
+# Backward-compatible name retained for existing callers.
+KUKAiiwaSolver = KUKAiiwa7R800Solver
 
 
 if __name__ == "__main__":

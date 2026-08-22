@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "srs-kinematics"
+version = "0.1.0"
+description = "Analytical inverse kinematics for 7-DoF S-R-S manipulators"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = ["numpy>=1.21"]
+keywords = ["robotics", "kinematics", "inverse-kinematics", "srs"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering",
+]
+
+[project.optional-dependencies]
+logging = ["coloredlogs>=15.0.1"]
+test = ["pytest>=7"]
+visualization = ["viser>=1.0", "yourdfpy>=0.0.58", "trimesh>=4.0"]
+
+[tool.setuptools]
+py-modules = [
+    "solver",
+    "srs_analytical_solver",
+    "kuka_iiwa_solver",
+    "srs_kinematics",
+]
+package-dir = {"" = "src"}
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
