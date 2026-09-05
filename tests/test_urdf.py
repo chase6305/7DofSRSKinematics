@@ -5,7 +5,6 @@ import numpy as np
 
 from kuka_iiwa_solver import KUKAiiwaSolver
 
-
 ROOT = Path(__file__).resolve().parents[1]
 URDF_PATH = ROOT / "urdf" / "iiwa_7.urdf"
 
@@ -67,3 +66,38 @@ def test_solver_and_urdf_joint_limits_match():
     np.testing.assert_allclose(solver.lower_position_limits, lower)
     np.testing.assert_allclose(solver.upper_position_limits, upper)
     assert np.all([float(limit.get("velocity")) == 10.0 for limit in limits])
+
+
+def test_solver_tcp_matches_independent_urdf_forward_kinematics():
+    """Integrate URDF joint origins directly, without optional robot libraries."""
+    solver = KUKAiiwaSolver()
+    joints = load_robot().findall("joint")
+
+    def axis_rotation(axis, angle):
+        c, s = np.cos(angle), np.sin(angle)
+        if axis == 0:
+            return np.array([[1, 0, 0], [0, c, -s], [0, s, c]])
+        if axis == 1:
+            return np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
+        return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+
+    rng = np.random.default_rng(14)
+    for q in rng.uniform(
+        solver.lower_position_limits, solver.upper_position_limits, (20, 7)
+    ):
+        pose = np.eye(4)
+        for index, joint in enumerate(joints):
+            origin = joint.find("origin")
+            roll, pitch, yaw = np.fromstring(origin.get("rpy"), sep=" ")
+            offset = np.eye(4)
+            offset[:3, :3] = (
+                axis_rotation(2, yaw) @ axis_rotation(1, pitch) @ axis_rotation(0, roll)
+            )
+            offset[:3, 3] = np.fromstring(origin.get("xyz"), sep=" ")
+            pose = pose @ offset
+            if joint.get("type") == "revolute":
+                rotation = np.eye(4)
+                rotation[:3, :3] = axis_rotation(2, q[index])
+                pose = pose @ rotation
+        np.testing.assert_allclose(solver.get_fk(q)[:3, 3], pose[:3, 3], atol=1e-12)
+        np.testing.assert_allclose(solver.get_fk(q)[:3, :3], pose[:3, :3], atol=1e-12)

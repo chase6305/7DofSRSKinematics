@@ -10,9 +10,6 @@ from collections import deque
 from pathlib import Path
 
 import numpy as np
-import trimesh
-import viser
-from yourdfpy import URDF
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -21,6 +18,8 @@ from kuka_iiwa_solver import KUKAiiwaSolver  # noqa: E402
 
 
 def pose_components(transform: np.ndarray):
+    import trimesh
+
     return (
         trimesh.transformations.quaternion_from_matrix(transform),
         transform[:3, 3],
@@ -28,6 +27,8 @@ def pose_components(transform: np.ndarray):
 
 
 def pose_from_control(control) -> np.ndarray:
+    import trimesh
+
     pose = trimesh.transformations.quaternion_matrix(control.wxyz)
     pose[:3, 3] = control.position
     return pose
@@ -43,7 +44,12 @@ def pose_error(actual: np.ndarray, target: np.ndarray):
     return position, float(np.rad2deg(np.arccos(cosine)))
 
 
-def benchmark(solver: KUKAiiwaSolver, samples: int, num_samples: int) -> dict:
+def benchmark(
+    solver: KUKAiiwaSolver,
+    samples: int,
+    num_samples: int,
+    search_mode: str = "continuous",
+) -> dict:
     if samples < 1:
         raise ValueError("validation-samples must be positive")
     rng = np.random.default_rng(6305)
@@ -61,7 +67,9 @@ def benchmark(solver: KUKAiiwaSolver, samples: int, num_samples: int) -> dict:
             solver.upper_position_limits,
         )
         started = time.perf_counter()
-        ok, solution = solver.get_ik(target, seed, num_samples=num_samples)
+        ok, solution = solver.get_ik(
+            target, seed, num_samples=num_samples, search_mode=search_mode
+        )
         durations.append((time.perf_counter() - started) * 1e3)
         if not ok:
             continue
@@ -71,6 +79,7 @@ def benchmark(solver: KUKAiiwaSolver, samples: int, num_samples: int) -> dict:
         rotation_errors.append(rotation)
     return {
         "samples": samples,
+        "search_mode": search_mode,
         "successes": successes,
         "median_ms": float(np.median(durations)),
         "p95_ms": float(np.percentile(durations, 95)),
@@ -84,24 +93,32 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--num-samples", type=int, default=73)
     parser.add_argument(
-        "--search-mode", choices=("continuous", "global"),
+        "--search-mode",
+        choices=("continuous", "global"),
         default="continuous",
     )
     parser.add_argument("--validation-samples", type=int, default=24)
     parser.add_argument("--validate-only", action="store_true")
     args = parser.parse_args()
+    if args.validation_samples < 1 or args.num_samples < 2:
+        parser.error("validation-samples must be >= 1 and num-samples must be >= 2")
 
     solver = KUKAiiwaSolver()
-    validation = benchmark(solver, args.validation_samples, args.num_samples)
+    validation = benchmark(
+        solver, args.validation_samples, args.num_samples, args.search_mode
+    )
     if args.validate_only:
         print(
-            f"IK {validation['successes']}/{validation['samples']}, "
+            f"IK [{validation['search_mode']}] {validation['successes']}/{validation['samples']}, "
             f"median/p95={validation['median_ms']:.3f}/"
             f"{validation['p95_ms']:.3f} ms, max residual="
             f"{validation['max_position'] * 1e3:.3e} mm/"
             f"{validation['max_rotation']:.3e} deg"
         )
-        return
+        raise SystemExit(0 if validation["successes"] == validation["samples"] else 1)
+
+    import viser
+    from yourdfpy import URDF
 
     urdf_path = ROOT / "urdf" / "iiwa_7.urdf"
     # yourdfpy derives the mesh directory only for string paths (not Path).
@@ -111,8 +128,13 @@ def main() -> None:
 
     server = viser.ViserServer(port=args.port)
     server.scene.add_grid(
-        "/world/grid", width=3.0, height=3.0, cell_size=0.1,
-        section_size=0.5, plane_opacity=0.08, shadow_opacity=0.15,
+        "/world/grid",
+        width=3.0,
+        height=3.0,
+        cell_size=0.1,
+        section_size=0.5,
+        plane_opacity=0.08,
+        shadow_opacity=0.15,
     )
     server.scene.add_frame("/world/base", axes_length=0.16, axes_radius=0.006)
 
@@ -131,20 +153,29 @@ def main() -> None:
         "/target", scale=0.18, wxyz=wxyz, position=position
     )
     actual_frame = server.scene.add_frame(
-        "/actual_tcp", axes_length=0.13, axes_radius=0.005,
-        wxyz=wxyz, position=position,
+        "/actual_tcp",
+        axes_length=0.13,
+        axes_radius=0.005,
+        wxyz=wxyz,
+        position=position,
     )
     target_marker = server.scene.add_icosphere(
-        "/target_marker", radius=0.014, color=(255, 155, 45),
+        "/target_marker",
+        radius=0.014,
+        color=(255, 155, 45),
         position=position,
     )
     actual_marker = server.scene.add_icosphere(
-        "/actual_marker", radius=0.012, color=(45, 175, 255),
+        "/actual_marker",
+        radius=0.012,
+        color=(45, 175, 255),
         position=position,
     )
     error_line = server.scene.add_line_segments(
-        "/position_error", np.array([[position, position]]),
-        colors=(235, 70, 70), line_width=3.0,
+        "/position_error",
+        np.array([[position, position]]),
+        colors=(235, 70, 70),
+        line_width=3.0,
     )
 
     sliders = []
@@ -165,11 +196,17 @@ def main() -> None:
             "Play fixed-TCP arm-angle motion", initial_value=False
         )
         null_range = server.gui.add_slider(
-            "Arm-angle range [deg]", min=1.0, max=60.0, step=1.0,
+            "Arm-angle range [deg]",
+            min=1.0,
+            max=60.0,
+            step=1.0,
             initial_value=25.0,
         )
         null_speed = server.gui.add_slider(
-            "Frequency [Hz]", min=0.05, max=1.0, step=0.05,
+            "Frequency [Hz]",
+            min=0.05,
+            max=1.0,
+            step=0.05,
             initial_value=0.2,
         )
     status = server.gui.add_markdown("")
@@ -235,6 +272,7 @@ def main() -> None:
             slider.value = float(np.rad2deg(value))
 
     for index, slider in enumerate(sliders):
+
         @slider.on_update
         def _on_joint(_event, joint_index=index, handle=slider):
             if state["busy"]:
@@ -256,7 +294,9 @@ def main() -> None:
             state["target"] = pose_from_control(target)
             solve_started = time.perf_counter()
             ok, solution = solver.get_ik(
-                state["target"], joints.copy(), num_samples=args.num_samples,
+                state["target"],
+                joints.copy(),
+                num_samples=args.num_samples,
                 search_mode=args.search_mode,
             )
             state["solve_ms"] = (time.perf_counter() - solve_started) * 1e3
@@ -301,9 +341,7 @@ def main() -> None:
                     psi = base.redundancy + np.deg2rad(null_range.value) * np.sin(
                         2.0 * np.pi * null_speed.value * elapsed
                     )
-                    selected = type(base)(
-                        base.shoulder, base.elbow, base.wrist, psi
-                    )
+                    selected = type(base)(base.shoulder, base.elbow, base.wrist, psi)
                     ok, solution = solver.solve_configuration(
                         state["animation_target"], selected, joints
                     )

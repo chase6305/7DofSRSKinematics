@@ -1,19 +1,12 @@
+import logging
 import typing
 from abc import ABCMeta, abstractmethod
-from itertools import product
-import logging
-try:  # Pretty logging is optional; the solver itself only depends on NumPy.
-    import coloredlogs
-
-    coloredlogs.install(
-        level="INFO", fmt="%(asctime)s,%(msecs)03d %(levelname)s %(message)s"
-    )
-except ImportError:  # pragma: no cover - depends on the user's environment
-    logging.basicConfig(level=logging.INFO)
 
 import numpy as np
 
-__all__ = ["Solver"]
+__all__ = ["ISolver", "Solver"]
+
+logger = logging.getLogger(__name__)
 
 
 class ISolver(metaclass=ABCMeta):
@@ -22,25 +15,13 @@ class ISolver(metaclass=ABCMeta):
         self,
         target_pose: np.ndarray,
         joint_seed: np.ndarray,
-        num_sample: int = None,
+        num_samples: typing.Optional[int] = None,
     ):
-        r"""Computes the inverse kinematics for a given target pose.
+        """Return (success, joints) for a target pose and joint seed.
 
-        This function generates random joint configurations within the specified limits,
-        including the provided joint_seed, and attempts to find valid inverse kinematics solutions.
-        It then identifies the joint position that is closest to the joint_seed.
-
-        Args:
-            target_pose (np.ndarray): The target pose represented as a 4x4 transformation matrix.
-            joint_seed (np.ndarray): The initial joint positions used as a seed.
-            num_sample (int, optional): The number of random joint seed to generate.
-
-        Returns:
-            Tuple[bool, np.ndarray]: A tuple containing:
-                - A boolean indicating whether a valid solution was found.
-                - The closest joint position to the joint_seed, or an empty list if no valid solutions were found.
+        A failed solve returns (False, None). ``num_samples`` optionally
+        overrides the configured search sample count.
         """
-        pass
 
     @abstractmethod
     def get_fk(self, qpos: np.ndarray, index: int = -1) -> np.ndarray:
@@ -54,7 +35,6 @@ class ISolver(metaclass=ABCMeta):
         Returns:
             np.ndarray: A 4x4 transformation matrix representing the pose of the specified link.
         """
-        pass
 
 
 class Solver(ISolver):
@@ -114,30 +94,30 @@ class Solver(ISolver):
             max_iterations (int): Maximum number of iterations, must be positive.
             dt (float): Time step size, must be positive.
             damp (float): Damping factor, must be non-negative.
-            num_samples (int): Number of samples, must be positive.
+            num_samples (int): Number of samples, must be an integer >= 2.
             is_only_position_constraint (bool): Flag to indicate whether the solver should only consider position constraints.
 
         Returns:
             bool: True if all parameters are valid and set, False otherwise.
         """
-        # Validate parameters
-        if pos_eps <= 0:
-            logging.warning("Pos epsilon must be positive.")
-            return False
-        if rot_eps <= 0:
-            logging.warning("Rot epsilon must be positive.")
-            return False
-        if max_iterations <= 0:
-            logging.warning("Max iterations must be positive.")
-            return False
-        if dt <= 0:
-            logging.warning("Time step must be positive.")
-            return False
-        if damp < 0:
-            logging.warning("Damping factor must be non-negative.")
-            return False
-        if num_samples <= 0:
-            logging.warning("Number of samples must be positive.")
+        positive = (pos_eps, rot_eps, dt)
+        try:
+            valid = all(
+                np.ndim(value) == 0 and np.isfinite(value) and value > 0
+                for value in positive
+            )
+            valid = valid and np.ndim(damp) == 0 and np.isfinite(damp) and damp >= 0
+            valid = valid and all(
+                isinstance(value, (int, np.integer))
+                and not isinstance(value, (bool, np.bool_))
+                and value >= minimum
+                for value, minimum in ((max_iterations, 1), (num_samples, 2))
+            )
+            valid = valid and isinstance(is_only_position_constraint, (bool, np.bool_))
+        except (TypeError, ValueError):
+            valid = False
+        if not valid:
+            logger.warning("Invalid iteration parameters; existing settings retained.")
             return False
 
         # Set parameters if all are valid
@@ -175,7 +155,7 @@ class Solver(ISolver):
         }
 
     def set_ik_nearst_weight(
-        self, ik_weight: np.ndarray, joint_ids: np.ndarray = None
+        self, ik_weight: np.ndarray, joint_ids: typing.Optional[np.ndarray] = None
     ) -> bool:
         r"""Sets the inverse kinematics nearest weight.
 
@@ -187,56 +167,44 @@ class Solver(ISolver):
         Returns:
             bool: True if the weights are set successfully, False otherwise.
         """
-        ik_weight = np.asarray(ik_weight, dtype=float)
-        if ik_weight.ndim != 1 or not np.all(np.isfinite(ik_weight)):
-            logging.warning("ik_weight must be a finite one-dimensional array.")
+        try:
+            ik_weight = np.asarray(ik_weight, dtype=float)
+            joint_ids = np.asarray(
+                np.arange(self.dof) if joint_ids is None else joint_ids
+            )
+        except (TypeError, ValueError):
             return False
-        if np.any(ik_weight < 0.0):
-            logging.warning("ik_weight values must be non-negative.")
-            return False
-
-        # Set joint_ids to all joint indices if it is None
-        if joint_ids is None:
-            joint_ids = np.arange(self.dof)
-
-        joint_ids = np.array(joint_ids)
-
-        # Check if joint_ids has valid indices
-        if np.any(joint_ids >= self.dof) or np.any(joint_ids < 0):
-            logging.warning(
-                "joint_ids must contain valid indices between 0 and {}.".format(
-                    self.dof - 1
-                )
+        if (
+            ik_weight.ndim != 1
+            or not np.all(np.isfinite(ik_weight))
+            or np.any(ik_weight < 0.0)
+            or joint_ids.ndim != 1
+            or not np.issubdtype(joint_ids.dtype, np.integer)
+            or np.any(joint_ids < 0)
+            or np.any(joint_ids >= self.dof)
+            or ik_weight.shape != joint_ids.shape
+            or len(np.unique(joint_ids)) != len(joint_ids)
+        ):
+            logger.warning(
+                "Expected non-negative finite weights and unique integer joint indices."
             )
             return False
-
-        # Check if ik_weight and joint_ids have the same length
-        if ik_weight.shape[0] != joint_ids.shape[0]:
-            logging.warning("ik_weight and joint_ids must have the same length.")
-            return False
-
-        # Initialize the weights
-        if self.ik_nearst_weight is None:
-            # If ik_nearst_weight is None, set all weights to 1
-            self.ik_nearst_weight = np.ones(self.dof)
-
-            # Set specific weights for joint_ids to the provided ik_weight
-            for i, joint_id in enumerate(joint_ids):
-                self.ik_nearst_weight[joint_id] = ik_weight[i]
-        else:
-            # If ik_nearst_weight is not None, only fill joint_ids
-            for i, joint_id in enumerate(joint_ids):
-                self.ik_nearst_weight[joint_id] = ik_weight[i]
-
+        weights = (
+            np.ones(self.dof)
+            if self.ik_nearst_weight is None
+            else self.ik_nearst_weight.copy()
+        )
+        weights[joint_ids] = ik_weight
+        self.ik_nearst_weight = weights
         return True
 
     def get_ik_nearst_weight(self):
         r"""Gets the inverse kinematics nearest weight.
 
         Returns:
-            np.ndarray: A numpy array representing the nearest weights for inverse kinematics.
+            np.ndarray: A copy of the nearest weights, or None if unset.
         """
-        return self.ik_nearst_weight
+        return None if self.ik_nearst_weight is None else self.ik_nearst_weight.copy()
 
     def set_position_limits(
         self,
@@ -252,31 +220,22 @@ class Solver(ISolver):
         Returns:
             bool: True if limits are successfully set, False if the input is invalid.
         """
+        try:
+            lower = np.asarray(lower_position_limits, dtype=float)
+            upper = np.asarray(upper_position_limits, dtype=float)
+        except (TypeError, ValueError):
+            return False
         if (
-            len(lower_position_limits) != self.dof
-            or len(upper_position_limits) != self.dof
+            lower.shape != (self.dof,)
+            or upper.shape != (self.dof,)
+            or not np.all(np.isfinite(lower))
+            or not np.all(np.isfinite(upper))
+            or np.any(lower > upper)
         ):
-            logging.warning("Length of limits must match the number of joints.")
+            logger.warning("Expected finite joint-limit vectors with lower <= upper.")
             return False
-
-        if not (
-            np.all(np.isfinite(lower_position_limits))
-            and np.all(np.isfinite(upper_position_limits))
-        ):
-            logging.warning("Joint limits must be finite.")
-            return False
-
-        if any(
-            lower > upper
-            for lower, upper in zip(lower_position_limits, upper_position_limits)
-        ):
-            logging.warning(
-                "Each lower limit must be less than or equal to the corresponding upper limit."
-            )
-            return False
-
-        self.lower_position_limits = np.array(lower_position_limits)
-        self.upper_position_limits = np.array(upper_position_limits)
+        self.lower_position_limits = lower.copy()
+        self.upper_position_limits = upper.copy()
         return True
 
     def get_position_limits(self) -> dict:
@@ -307,29 +266,23 @@ class Solver(ISolver):
             xpos (np.ndarray): The 4x4 homogeneous matrix to be set as the TCP position.
 
         Raises:
-            ValueError: If the input is not a 4x4 numpy array.
+            ValueError: If the input is not a finite rigid 4x4 transform.
         """
-        xpos = np.array(xpos)
-        if xpos.shape != (4, 4):
-            raise ValueError("Input must be a 4x4 homogeneous matrix")
-        self.tcp_xpos = xpos
+        self.tcp_xpos = self._validate_pose(xpos, "xpos").copy()
 
     def get_tcp(self) -> np.ndarray:
         r"""Returns the current TCP position.
 
         Returns:
             np.ndarray: The current TCP position.
-
-        Raises:
-            ValueError: If the TCP position has not been set.
         """
-        return self.tcp_xpos
+        return self.tcp_xpos.copy()
 
     def qpos_to_limits(
         self,
         q: np.ndarray,
         joint_seed: np.ndarray,
-        active_qmask: np.ndarray = None,
+        active_qmask: typing.Optional[np.ndarray] = None,
     ):
         """Adjusts the joint positions (q) to be within specified limits and as close as possible to the joint seed,
         while minimizing the total weighted difference.
@@ -340,113 +293,62 @@ class Solver(ISolver):
             active_qmask (np.ndarray): A mask indicating which joints are active.
 
         Returns:
-            np.ndarray: The adjusted joint positions within the specified limits.
+            np.ndarray: The adjusted joints, or [] if no periodic representation fits.
         """
-        best_qpos_limit = np.copy(q)
-        best_total_q_diff = float("inf")
+        q = self._validate_joints(q, "q")
+        joint_seed = self._validate_joints(joint_seed, "joint_seed")
+        if active_qmask is not None:
+            active_qmask = np.asarray(active_qmask)
+            if active_qmask.shape != (self.dof,) or not np.all(
+                (active_qmask == 0) | (active_qmask == 1)
+            ):
+                raise ValueError(
+                    "active_qmask must be a boolean vector matching the joints"
+                )
+        mapped, valid = self._map_to_limits(q, joint_seed, active_qmask)
+        return mapped if valid else []
 
-        if active_qmask is None:
-            active_qmask = np.ones_like(q)
+    def _map_to_limits(self, q, joint_seed, active_qmask=None):
+        """Map (..., dof) candidates independently in O(candidates * dof).
 
-        # Initialize a list for possible values for each joint
-        possible_arrays = []
-
-        if self.ik_nearst_weight is None:
-            self.ik_nearst_weight = np.ones_like(best_qpos_limit)
-
-        # Generate possible values for each joint
-        dof_num = len(q)
-        for i in range(dof_num):
-            if active_qmask[i]:  # Only process active joints
-                current_possible_values = []
-
-                # Calculate how many 2π fits into the adjustment to the limits
-                lower_adjustment = (q[i] - self.lower_position_limits[i]) // (2 * np.pi)
-                upper_adjustment = (self.upper_position_limits[i] - q[i]) // (2 * np.pi)
-
-                # Consider the current value and its periodic adjustments
-                for offset in range(
-                    int(lower_adjustment) - 1, int(upper_adjustment) + 2
-                ):  # Adjust by calculated limits
-                    adjusted_value = q[i] + offset * (2 * np.pi)
-
-                    # Check if the adjusted value is within limits
-                    if (
-                        self.lower_position_limits[i]
-                        <= adjusted_value
-                        <= self.upper_position_limits[i]
-                    ):
-                        current_possible_values.append(adjusted_value)
-
-                # Also check the original value
-                if (
-                    self.lower_position_limits[i]
-                    <= q[i]
-                    <= self.upper_position_limits[i]
-                ):
-                    current_possible_values.append(q[i])
-
-                if not current_possible_values:
-                    return []  # If no possible values for an active joint
-                possible_arrays.append(current_possible_values)
-            else:
-                # If not active, just append the original value
-                possible_arrays.append([q[i]])
-
-        # Generate all possible combinations
-        all_possible_combinations = product(*possible_arrays)
-
-        # Check each combination and calculate the absolute difference sum
-        for combination in all_possible_combinations:
-            total_q_diff = np.sum(
-                np.abs(np.array(combination) - joint_seed) * self.ik_nearst_weight
-            )
-
-            # If a smaller difference sum is found, update the best solution
-            if total_q_diff < best_total_q_diff:
-                best_total_q_diff = total_q_diff
-                best_qpos_limit = np.array(combination)
-
-        return best_qpos_limit
-
-    @abstractmethod
-    def get_ik(
-        self,
-        target_pose: np.ndarray,
-        joint_seed: np.ndarray,
-        num_sample: int = None,
-    ):
-        r"""Computes the inverse kinematics for a given target pose.
-
-        This function generates random joint configurations within the specified limits,
-        including the provided joint_seed, and attempts to find valid inverse kinematics solutions.
-        It then identifies the joint position that is closest to the joint_seed.
-
-        Args:
-            target_pose (np.ndarray): The target pose represented as a 4x4 transformation matrix.
-            joint_seed (np.ndarray): The initial joint positions used as a seed.
-            num_sample (int, optional): The number of random joint seed to generate.
-
-        Returns:
-            Tuple[bool, np.ndarray]: A tuple containing:
-                - A boolean indicating whether a valid solution was found.
-                - The closest joint position to the joint_seed, or an empty list if no valid solutions were found.
+        For non-negative weights, each periodic joint can minimize its own
+        seed distance; a Cartesian product of periodic values is unnecessary.
         """
-        pass
+        period = 2.0 * np.pi
+        tolerance = 1e-12
+        lower, upper = self.lower_position_limits, self.upper_position_limits
+        minimum = np.ceil((lower - q - tolerance) / period)
+        maximum = np.floor((upper - q + tolerance) / period)
+        nearest = np.floor((joint_seed - q) / period + 0.5)
+        turns = np.clip(nearest, minimum, maximum)
+        mapped = np.clip(q + period * turns, lower, upper)
+        active = (
+            np.ones(self.dof, dtype=bool)
+            if active_qmask is None
+            else active_qmask.astype(bool)
+        )
+        valid = np.all((minimum <= maximum) | ~active, axis=-1)
+        return np.where(active, mapped, q), valid
 
-    @abstractmethod
-    def get_fk(self, qpos: np.ndarray, index: int = -1) -> np.ndarray:
-        r"""Get the forward kinematics for a given joint state.
+    def _validate_joints(self, values, name="qpos"):
+        values = np.asarray(values, dtype=float)
+        if values.shape != (self.dof,) or not np.all(np.isfinite(values)):
+            raise ValueError(f"{name} must be a finite array of shape ({self.dof},)")
+        return values
 
-        Args:
-            qpos (np.ndarray): A 1D array of shape [dof,] representing the joint state.
-            index (int, optional): The index of the link for which to retrieve the pose.
-                                Defaults to -1, which typically corresponds to the end-effector.
-
-        Returns:
-            np.ndarray: A 4x4 transformation matrix representing the pose of the specified link.
-        """
-        pass
+    @staticmethod
+    def _validate_pose(pose, name="target_pose"):
+        pose = np.asarray(pose, dtype=float)
+        if pose.shape != (4, 4) or not np.all(np.isfinite(pose)):
+            raise ValueError(f"{name} must be a finite 4x4 matrix")
+        rotation = pose[:3, :3]
+        if (
+            not np.allclose(pose[3], [0.0, 0.0, 0.0, 1.0], atol=1e-8, rtol=0.0)
+            or not np.allclose(rotation.T @ rotation, np.eye(3), atol=1e-7, rtol=0.0)
+            or not np.isclose(np.linalg.det(rotation), 1.0, atol=1e-7, rtol=0.0)
+        ):
+            raise ValueError(f"{name} must be a rigid homogeneous transform")
+        return pose
 
     def limit_robot_config(self, qpos_list: np.ndarray) -> np.ndarray:
         r"""Limit the robot configuration based on the elbow position.

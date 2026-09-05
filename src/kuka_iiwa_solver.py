@@ -1,17 +1,19 @@
-import numpy as np
-from srs_analytical_solver import SRSAnalyticalSolver
-import logging
 from pathlib import Path
-try:
-    import coloredlogs
 
-    coloredlogs.install(
-        level="INFO", fmt="%(asctime)s,%(msecs)03d %(levelname)s %(message)s"
-    )
-except ImportError:  # pragma: no cover
-    logging.basicConfig(level=logging.INFO)
+import numpy as np
+
+from srs_analytical_solver import SRSAnalyticalSolver
 
 __all__ = ["KUKAiiwa7R800Solver", "KUKAiiwaSolver"]
+
+
+def _urdf_path():
+    checkout = Path(__file__).resolve().parents[1] / "urdf" / "iiwa_7.urdf"
+    if checkout.is_file():
+        return str(checkout)
+    from srs_kinematics_assets import URDF_PATH
+
+    return str(URDF_PATH)
 
 
 class KUKAiiwa7R800Solver(SRSAnalyticalSolver):
@@ -47,9 +49,7 @@ class KUKAiiwa7R800Solver(SRSAnalyticalSolver):
         self.upper_position_limits = -self.lower_position_limits
 
         super().__init__(
-            urdf_path=str(
-                Path(__file__).resolve().parents[1] / "urdf" / "iiwa_7.urdf"
-            ),
+            urdf_path=_urdf_path(),
             end_link_name="link_ee",
             **kwargs,
         )
@@ -72,6 +72,5 @@ if __name__ == "__main__":
 
     res, qpos_ik = solver.get_ik(target_pose=xpos, joint_seed=np.zeros(7))
 
-    from IPython import embed
-
-    embed()
+    print(f"IK success: {res}")
+    print(qpos_ik)

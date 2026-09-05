@@ -20,7 +20,10 @@ classifiers = [
 [project.optional-dependencies]
 logging = ["coloredlogs>=15.0.1"]
 test = ["pytest>=7"]
-visualization = ["viser>=1.0", "yourdfpy>=0.0.58", "trimesh>=4.0"]
+visualization = ["viser==1.0.24", "yourdfpy>=0.0.58", "trimesh>=4.0"]
+
+[project.scripts]
+srs-viser-lab = "srs_viser.app:main"
 
 [tool.setuptools]
 py-modules = [
@@ -29,7 +32,11 @@ py-modules = [
     "kuka_iiwa_solver",
     "srs_kinematics",
 ]
-package-dir = {"" = "src"}
+packages = ["srs_kinematics_assets", "srs_viser"]
+package-dir = {"" = "src", "srs_kinematics_assets" = "urdf"}
+
+[tool.setuptools.package-data]
+srs_kinematics_assets = ["*.urdf", "README.md", "ASSET_LICENSE", "visual/*.glb", "collision/*.stl"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
