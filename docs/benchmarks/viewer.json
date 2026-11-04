@@ -1,0 +1,40 @@
+{
+  "before": [
+    484.26744993776083,
+    509.4627150101587,
+    486.564310034737,
+    488.9626610092819,
+    489.530949969776,
+    482.49849397689104,
+    495.1384320156649
+  ],
+  "after": [
+    228.45763608347625,
+    229.87102903425694,
+    228.63592498470098,
+    233.2096149912104,
+    226.0954239172861,
+    232.8001280548051,
+    242.0801289845258
+  ],
+  "medians_ms": {
+    "before": 488.9626610092819,
+    "after": 229.87102903425694
+  },
+  "encoded_unique_meshes": 11,
+  "encoded_cache_bytes": 4635816,
+  "date_utc": "2026-11-04",
+  "before_commit": "8174d96deb07aedc306265d7ee0e19c6adac72db",
+  "environment": {
+    "python": "3.10.0",
+    "numpy": "2.2.6",
+    "torch": "2.13.0",
+    "warp-lang": "1.16.0",
+    "viser": "1.0.24",
+    "yourdfpy": "0.0.60",
+    "trimesh": "4.12.2"
+  },
+  "warmup_trials": 1,
+  "recorded_trials": 7,
+  "scope": "First branch-mode app.step, including IK and server scene creation; excludes initial app construction, browser, network and WebGL."
+}

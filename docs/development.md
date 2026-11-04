@@ -91,3 +91,28 @@ Measure the current implementations with the cross-backend tool:
 ```bash
 python tools/compare_backends.py --warp-repo ../7DofSRSKinematicsWarp --samples 40 --num-samples 73
 ```
+
+## Viewer startup and branch gallery
+
+The primary robot parses the URDF once. Gallery robots own independent joint
+states and transform graphs while sharing source meshes and link-local GLB
+bytes. Opening the gallery creates its eight robot instances lazily; subsequent
+visits reuse them. Integration checks compare the cached GLBs byte-for-byte
+with Viser's normal exports and verify independent joint updates.
+
+A local comparison against `8174d96` reduced the first gallery switch from
+489 ms to 230 ms (medians of seven interleaved trials after one warmup). It
+includes IK and server scene construction, excluding initial app construction,
+browser, network and WebGL. The environment is Python 3.10, Viser 1.0.24,
+yourdfpy 0.0.60 and trimesh 4.12.2; hardware and load affect results. See the
+[raw measurements](benchmarks/viewer.json).
+
+Measure startup and first/repeated gallery opening separately with the viewer
+extra installed:
+
+```bash
+python tools/benchmark_viewer.py --repeats 7 --output viewer-benchmark.json
+```
+
+The tool needs no browser. It checks all eight robot instances, their reuse and
+TCP residuals, and writes a new JSON file with dependency versions and samples.

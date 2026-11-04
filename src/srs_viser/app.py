@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
+from functools import partial
 import inspect
 import json
 import time
@@ -43,6 +45,31 @@ LEGENDS = {
 }
 
 
+class _RobotMeshScene:
+    """Reuse encoded link meshes within one asset and scale across robot copies."""
+
+    def __init__(self, scene, root, meshes):
+        self._scene, self._root, self._meshes = scene, root, meshes
+
+    def __getattr__(self, name):
+        return getattr(self._scene, name)
+
+    def add_mesh_trimesh(self, name, mesh, **kwargs):
+        # Joint frame transforms stay independent; these link-local meshes are
+        # static. Cache only within this app, whose robots share asset and scale.
+        key = name[len(self._root) :]
+        if key not in self._meshes:
+            self._meshes[key] = mesh.export(file_type="glb")
+        return self._scene.add_glb(name, glb_data=self._meshes[key], **kwargs)
+
+
+class _RobotMeshTarget:
+    """Scene adapter for the public methods used by ViserUrdf."""
+
+    def __init__(self, server, root, meshes):
+        self.scene = _RobotMeshScene(server.scene, root, meshes)
+
+
 class LabApp:
     """Callbacks enqueue changes; a single render loop owns solver and scene state."""
 
@@ -76,6 +103,8 @@ class LabApp:
         self.gallery_robots = []
         self.meshes_requested = meshes
         self.robot = None
+        self._robot_description = None
+        self._robot_meshes = {}
         try:
             self._build_scene()
             self._build_gui()
@@ -136,11 +165,23 @@ class LabApp:
             for name in ("Shoulder", "Elbow", "Wrist")
         ]
         if self.meshes_requested:
+            import yourdfpy
             from viser.extras import ViserUrdf
 
+            path = Path(self.model.backend.urdf_path)
+            self._robot_description = yourdfpy.URDF.load(
+                path,
+                build_scene_graph=True,
+                build_collision_scene_graph=False,
+                load_meshes=True,
+                load_collision_meshes=False,
+                filename_handler=partial(
+                    yourdfpy.filename_handler_magic, dir=path.parent
+                ),
+            )
             self.robot = ViserUrdf(
-                self.server,
-                Path(self.model.backend.urdf_path),
+                _RobotMeshTarget(self.server, "/primary/robot", self._robot_meshes),
+                self._robot_description,
                 root_node_name="/primary/robot",
             )
         sphere = self.trimesh.creation.icosphere(subdivisions=2, radius=1)
@@ -476,12 +517,17 @@ class LabApp:
             return
         from viser.extras import ViserUrdf
 
+        # Each robot owns joint state and transform graphs. Source meshes can
+        # be shared: Viser copies them before scaling and transforming them.
+        shared_meshes = {
+            id(mesh): mesh for mesh in self._robot_description.scene.geometry.values()
+        }
         for index, (offset, *_handles) in enumerate(self.gallery):
             prefix = f"/gallery/branch{index}/mesh"
             self.server.scene.add_frame(prefix, position=offset, show_axes=False)
             robot = ViserUrdf(
-                self.server,
-                Path(self.model.backend.urdf_path),
+                _RobotMeshTarget(self.server, prefix + "/robot", self._robot_meshes),
+                deepcopy(self._robot_description, memo=shared_meshes.copy()),
                 root_node_name=prefix + "/robot",
             )
             self.gallery_robots.append(robot)

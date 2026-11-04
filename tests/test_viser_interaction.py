@@ -208,10 +208,32 @@ def test_trajectory_reference_is_reused_until_reanchored(monkeypatch):
         app.close()
 
 
-def test_branch_meshes_are_lazy_and_reused():
-    pytest.importorskip("yourdfpy")
+def test_branch_meshes_are_lazy_and_reused(monkeypatch):
+    yourdfpy = pytest.importorskip("yourdfpy")
+    import trimesh
+    from copy import deepcopy
+    from viser.extras import ViserUrdf
+
+    loads = []
+    exports = []
+    load = yourdfpy.URDF.load
+    export = trimesh.Trimesh.export
+
+    def counted(*args, **kwargs):
+        loads.append(args[0])
+        return load(*args, **kwargs)
+
+    def encoded(*args, **kwargs):
+        data = export(*args, **kwargs)
+        exports.append(data)
+        return data
+
+    monkeypatch.setattr(yourdfpy.URDF, "load", counted)
+    monkeypatch.setattr(trimesh.Trimesh, "export", encoded)
     app = LabApp(Backend(), port=0, meshes=True)
     try:
+        initial_exports = len(exports)
+        assert len(app._robot_meshes) == len(app._robot_description.scene.geometry)
         assert not app.gallery_robots
         app.mesh_toggle.value = False
         app.commands.put(("mode", MODES["branches"]))
@@ -222,6 +244,32 @@ def test_branch_meshes_are_lazy_and_reused():
         app.step(1 / 30)
         robots = tuple(app.gallery_robots)
         assert len(robots) == 8
+        assert len(loads) == 1
+        assert len(exports) == initial_exports
+        descriptions = [app._robot_description, *[robot._urdf for robot in robots]]
+        assert len({id(description) for description in descriptions}) == 9
+        for description in descriptions[1:]:
+            assert description._cfg is not descriptions[0]._cfg
+            assert description.scene.graph is not descriptions[0].scene.graph
+            assert all(
+                description.scene.geometry[name] is mesh
+                for name, mesh in descriptions[0].scene.geometry.items()
+            )
+        preserved = [description.cfg.copy() for description in descriptions]
+        robots[0].update_cfg(np.full(7, 0.1))
+        for description, cfg in zip(descriptions[2:], preserved[2:]):
+            np.testing.assert_array_equal(description.cfg, cfg)
+        np.testing.assert_array_equal(descriptions[0].cfg, preserved[0])
+        robots[0].update_cfg(preserved[1])
+        # The cached GLBs are byte-identical to Viser's normal exports even
+        # after the primary robot's joints have moved from their URDF defaults.
+        reference = ViserUrdf(
+            app.server,
+            deepcopy(app._robot_description),
+            root_node_name="/reference/robot",
+        )
+        assert exports[initial_exports:] == list(app._robot_meshes.values())
+        reference.show_visual = False
         assert [r.show_visual for r in robots] == [
             q is not None for q in app.model.gallery()
         ]
