@@ -24,11 +24,19 @@ from .model import (
 from .motions import PATHS, PLANES, PROJECTIONS, manifold_segments
 
 DESCRIPTIONS = {
-    "arm-angle": "**Fixed TCP, moving elbow.** Drag the arm-angle slider or press Play. Playback respects the joint-speed bound and pauses at infeasible steps. Orange shows the geometric elbow circle; joint limits can exclude parts of it. Drag the TCP gizmo to choose another target.",
-    "branches": "**One local target, eight S/E/W branches.** Tiles are translated only for display. Choose a branch and sweep the shared arm angle; unavailable branches are marked explicitly. Change the pose using the preset or joint controls.",
-    "jacobian": "**Motion that preserves the TCP.** Play projects joint-centering velocity into the full Jacobian null space, then corrects each step back to the fixed target. The wire ellipsoid shows translational velocity for unit joint-speed norm, with orientation unconstrained.",
-    "trajectory": "**Follow a Cartesian path.** Choose a shape and a world or TCP plane, then Play. Gray is the reference; green is the FK trace. TCP orientation and the S/E/W branch stay fixed. Progress slows to respect the joint-speed bound and pauses when no feasible step remains.",
-    "manifold": "**The fixed-TCP self-motion manifold.** Choose three joint coordinates for the colored branch curves, in radians. Move the arm angle or Play to follow the selected branch with bounded joint speed. Playback pauses when no feasible step remains. Gaps mark infeasible samples or discontinuities; crossings in a projection need not be the same seven-joint configuration.",
+    "arm-angle": "**Fixed tool. Moving elbow.** Sweep the arm angle to explore the robot's extra degree of freedom.",
+    "branches": "**One target. Eight configurations.** Compare shoulder, elbow and wrist branches at the same local TCP.",
+    "jacobian": "**Keep the tool still.** Move joints toward their centers through the full Jacobian null space.",
+    "trajectory": "**Draw with the TCP.** Follow a line, circle or figure eight with fixed tool orientation.",
+    "manifold": "**See the solution space.** Project fixed-TCP self-motion onto three joint coordinates.",
+}
+
+LEGENDS = {
+    "arm-angle": "Orange: geometric elbow circle. Pink: elbow. Teal: wrist. Some arm angles are excluded by joint limits.",
+    "branches": "Tiles are translated for display; local targets and arm angles are identical. An amber ring marks the selected branch. Unavailable solutions are hidden.",
+    "jacobian": "Teal: translational velocity ellipsoid for unit joint-speed norm (scale 0.25), with orientation unconstrained. Red: joint-centering preference. Playback uses the full 6×7 Jacobian and exact TCP correction; descent is local.",
+    "trajectory": "Gray: reference. Green: actual FK trace. Gold: current TCP. The right plot magnifies displacement ×6 in the selected plane.",
+    "manifold": "Colors: S/E/W branches. Gold: current configuration. Axes: joint angles in radians (scale 0.22). Gaps mark infeasible samples or jumps; projected crossings need not be the same seven-joint configuration. Finite sampling can miss narrow intervals.",
 }
 
 
@@ -59,6 +67,9 @@ class LabApp:
         self.last_metrics = 0.0
         self.render_count = 0
         self._manifold_render_key = None
+        self._trajectory_render_path = None
+        self._display_key = None
+        self.gallery_robots = []
         self.meshes_requested = meshes
         self.robot = None
         try:
@@ -90,10 +101,10 @@ class LabApp:
             height=6,
             cell_size=0.2,
             section_size=1.0,
-            plane_color=(27, 32, 41),
+            plane_color=(22, 27, 36),
             plane_opacity=1.0,
-            cell_color=(55, 64, 78),
-            section_color=(87, 97, 112),
+            cell_color=(37, 45, 58),
+            section_color=(56, 67, 83),
         )
         scene.add_frame("/origin", axes_length=0.2, axes_radius=0.004)
         zeros = np.zeros((4, 2, 3))
@@ -149,6 +160,11 @@ class LabApp:
             "/jacobian/principal_axes", np.zeros((3, 2, 3)), (104, 224, 202), 2
         )
         self.gallery = []
+        self.gallery_selection = []
+        angles = np.linspace(0, 2 * np.pi, 49)
+        ring = np.column_stack(
+            (0.18 * np.cos(angles), 0.18 * np.sin(angles), np.full_like(angles, 0.008))
+        )
         for index, branch in enumerate(BRANCHES):
             offset = np.array([(index % 4 - 1.5) * 1.45, (index // 4 - 0.5) * 1.65, 0])
             prefix = f"/gallery/branch{index}"
@@ -161,7 +177,19 @@ class LabApp:
                 point_shape="circle",
             )
             label = scene.add_label(
-                prefix + "/label", branch_label(branch), position=offset + [0, 0, 1.38]
+                prefix + "/label",
+                branch_label(branch),
+                position=offset + [0, -0.42, 0.05],
+                anchor="top-center",
+                font_screen_scale=0.8,
+            )
+            self.gallery_selection.append(
+                self._line(
+                    prefix + "/selection",
+                    np.stack((ring[:-1] + offset, ring[1:] + offset), axis=1),
+                    (238, 155, 63),
+                    4,
+                )
             )
             tcp = scene.add_frame(prefix + "/tcp", axes_length=0.095, axes_radius=0.003)
             self.gallery.append((offset, bones, points, label, tcp))
@@ -248,55 +276,69 @@ class LabApp:
             brand_color=(238, 155, 63),
             show_share_button=False,
         )
-        gui.add_markdown("## SRS Lab\nTrajectories · self-motion · branches")
+        gui.add_markdown(
+            f"## SRS Kinematics\n**iiwa 7 R800** · {self.model.backend.label}"
+        )
         self.mode = gui.add_dropdown(
             "Experiment", tuple(MODES.values()), initial_value=MODES[self.model.mode]
         )
         self.description = gui.add_markdown(DESCRIPTIONS[self.model.mode])
-        self.preset = gui.add_dropdown(
-            "Pose preset", tuple(PRESETS), initial_value=self.model.preset
-        )
-        self.branch = gui.add_dropdown(
-            "S/E/W branch",
-            tuple(map(branch_label, BRANCHES)),
-            initial_value=branch_label(self.model.branch),
-        )
-        self.angle = gui.add_slider("Arm angle offset [deg]", -180, 180, 0.5, 0.0)
         self.play = gui.add_checkbox("Play", False)
-        self.amplitude = gui.add_slider(
-            "Sweep amplitude [deg]", 5, 90, 1, self.model.amplitude
-        )
-        self.frequency = gui.add_slider(
-            "Frequency [Hz]", 0.05, 0.5, 0.05, self.model.frequency
-        )
-        self.path_kind = gui.add_dropdown(
-            "Cartesian path",
-            tuple(PATHS.values()),
-            initial_value=PATHS[self.model.path_kind],
-        )
-        self.path_plane = gui.add_dropdown(
-            "Path plane",
-            tuple(PLANES.values()),
-            initial_value=PLANES[self.model.path_plane],
-        )
-        self.path_radius = gui.add_slider(
-            "Path size [m]", 0.005, 0.1, 0.005, self.model.path_radius
-        )
-        self.max_joint_speed = gui.add_slider(
-            "Joint speed bound [rad/s]", 0.1, 2.0, 0.1, self.model.max_joint_speed
-        )
-        self.manifold_samples = gui.add_slider("Samples / branch", 17, 145, 8, 73)
-        self.manifold_projection = gui.add_dropdown(
-            "Projection axes", tuple(PROJECTIONS), initial_value="J1 / J3 / J5"
-        )
-        self.mesh_toggle = gui.add_checkbox(
-            "Show robot mesh", self.robot is not None, disabled=self.robot is None
-        )
-        self.reset_button = gui.add_button("Reset pose")
         self.metrics = gui.add_markdown("")
-        self.branch_table = gui.add_markdown("", visible=self.model.mode == "branches")
+        with gui.add_folder("Experiment controls"):
+            self.branch = gui.add_dropdown(
+                "S/E/W branch",
+                tuple(map(branch_label, BRANCHES)),
+                initial_value=branch_label(self.model.branch),
+            )
+            self.angle = gui.add_slider("Arm angle offset [deg]", -180, 180, 0.5, 0.0)
+            self.amplitude = gui.add_slider(
+                "Sweep amplitude [deg]", 5, 90, 1, self.model.amplitude
+            )
+            self.frequency = gui.add_slider(
+                "Frequency [Hz]", 0.05, 0.5, 0.05, self.model.frequency
+            )
+            self.path_kind = gui.add_dropdown(
+                "Cartesian path",
+                tuple(PATHS.values()),
+                initial_value=PATHS[self.model.path_kind],
+            )
+            self.path_plane = gui.add_dropdown(
+                "Path plane",
+                tuple(PLANES.values()),
+                initial_value=PLANES[self.model.path_plane],
+            )
+            self.path_radius = gui.add_slider(
+                "Path size [m]", 0.005, 0.1, 0.005, self.model.path_radius
+            )
+            self.max_joint_speed = gui.add_slider(
+                "Joint speed bound [rad/s]", 0.1, 2.0, 0.1, self.model.max_joint_speed
+            )
+            self.manifold_samples = gui.add_slider("Samples / branch", 17, 145, 8, 73)
+            self.manifold_projection = gui.add_dropdown(
+                "Projection axes", tuple(PROJECTIONS), initial_value="J1 / J3 / J5"
+            )
+        with gui.add_folder("Scene & legend", expand_by_default=False):
+            self.mesh_toggle = gui.add_checkbox(
+                "Show robot mesh", self.robot is not None, disabled=self.robot is None
+            )
+            self.guides = gui.add_checkbox("Geometry guides", True)
+            self.labels = gui.add_checkbox("Joint labels", False)
+            self.view_button = gui.add_button("Reset view")
+            self.legend = gui.add_markdown(LEGENDS[self.model.mode])
+            gui.add_markdown(
+                "Drag the TCP gizmo to set a target. Playback respects the joint-speed bound and pauses at infeasible steps."
+            )
+        with gui.add_folder(
+            "Branch details", expand_by_default=False
+        ) as self.branch_details:
+            self.branch_table = gui.add_markdown("")
         self.joint_sliders = []
         with gui.add_folder("Joint controls / new target", expand_by_default=False):
+            self.preset = gui.add_dropdown(
+                "Pose preset", tuple(PRESETS), initial_value=self.model.preset
+            )
+            self.reset_button = gui.add_button("Reset pose")
             for index, q in enumerate(self.model.q):
                 handle = gui.add_slider(
                     f"J{index + 1} [deg]",
@@ -324,6 +366,8 @@ class LabApp:
             "amplitude",
             "frequency",
             "mesh_toggle",
+            "guides",
+            "labels",
             "path_kind",
             "path_plane",
             "path_radius",
@@ -334,6 +378,11 @@ class LabApp:
             handle = getattr(self, name)
             handle.on_update(self._callback(name, lambda handle=handle: handle.value))
         self.reset_button.on_click(self._callback("reset", lambda: None))
+        self.view_button.on_click(
+            lambda event: (
+                self._camera(event.client) if event.client is not None else None
+            )
+        )
         self.target.on_update(self._callback("target", self._target_pose))
 
     def _callback(self, name, read):
@@ -351,14 +400,15 @@ class LabApp:
 
     def _camera(self, client):
         if self.model.mode == "branches":
-            client.camera.position = (0.8, -6.0, 5.3)
-            client.camera.look_at = (0.8, 0, 0.6)
+            client.camera.position = (2.9, -6.7, 4.4)
+            client.camera.look_at = (0.5, 0, 0.65)
         elif self.model.mode in ("manifold", "trajectory"):
-            client.camera.position = (2.7, -3.3, 2.2)
-            client.camera.look_at = (0.7, 0, 0.75)
+            client.camera.position = (2.4, -3.1, 1.9)
+            client.camera.look_at = (1.15, 0, 0.75)
         else:
-            client.camera.position = (1.1, -1.45, 1.25)
-            client.camera.look_at = (0, 0, 0.65)
+            client.camera.position = (1.05, -1.45, 1.12)
+            client.camera.look_at = (0.12, 0, 0.62)
+        client.camera.fov = np.deg2rad(45)
         client.camera.up_direction = (0, 0, 1)
 
     def apply(self, name, value):
@@ -366,6 +416,7 @@ class LabApp:
         if name == "mode":
             m.set_mode(next(key for key, label in MODES.items() if label == value))
             self.description.content = DESCRIPTIONS[m.mode]
+            self.legend.content = LEGENDS[m.mode]
             for client in self.server.get_clients().values():
                 self._camera(client)
         elif name in ("preset", "reset"):
@@ -407,12 +458,77 @@ class LabApp:
             self.manifold_samples.value = value
         elif name == "manifold_projection":
             self.manifold_projection.value = value
-        elif name != "mesh_toggle":
+        elif name not in ("mesh_toggle", "guides", "labels"):
             raise ValueError(f"unknown command {name}")
+
+    def _ensure_gallery_robots(self):
+        """Load the eight meshes only when the branch view first needs them."""
+        if self.gallery_robots or self.robot is None:
+            return
+        from viser.extras import ViserUrdf
+
+        for index, (offset, *_handles) in enumerate(self.gallery):
+            prefix = f"/gallery/branch{index}/mesh"
+            self.server.scene.add_frame(prefix, position=offset, show_axes=False)
+            robot = ViserUrdf(
+                self.server,
+                Path(self.model.backend.urdf_path),
+                root_node_name=prefix + "/robot",
+            )
+            self.gallery_robots.append(robot)
+
+    def _sync_visibility(self, gallery_mode, show_mesh, guides, labels):
+        """Update static scene and control visibility only after a display edit."""
+        mode = self.model.mode
+        key = (mode, show_mesh, guides, labels)
+        if key == self._display_key:
+            return
+        self.angle.disabled = mode in ("jacobian", "trajectory")
+        self.angle.visible = self.amplitude.visible = mode not in (
+            "jacobian",
+            "trajectory",
+        )
+        self.frequency.visible = mode != "jacobian"
+        self.branch_table.visible = self.branch_details.visible = mode in (
+            "branches",
+            "manifold",
+        )
+        self.path_kind.visible = self.path_plane.visible = self.path_radius.visible = (
+            mode == "trajectory"
+        )
+        self.manifold_samples.visible = self.manifold_projection.visible = (
+            mode == "manifold"
+        )
+        self.path_root.visible = mode == "trajectory"
+        self.manifold_root.visible = mode == "manifold"
+        self.target.visible = self.tcp.visible = not gallery_mode
+        self.arm.visible = not gallery_mode and not show_mesh
+        self.joints.visible = self.axis.visible = not gallery_mode and guides
+        self.target_label.visible = not gallery_mode and labels
+        for handle in self.sew_labels:
+            handle.visible = not gallery_mode and guides and labels
+        if self.robot is not None:
+            self.robot.show_visual = not gallery_mode and show_mesh
+        if not gallery_mode or not show_mesh:
+            for robot in self.gallery_robots:
+                robot.show_visual = False
+        if not gallery_mode:
+            for ring in self.gallery_selection:
+                ring.visible = False
+            for _, bones, points, label, tcp in self.gallery:
+                bones.visible = points.visible = label.visible = tcp.visible = False
+        else:
+            self.circle.visible = False
+        self.ellipsoid.visible = self.velocity.visible = self.ellipsoid_axes.visible = (
+            mode == "jacobian"
+        )
+        self._display_key = key
 
     def render(self, force_metrics=False):
         m = self.model
         gallery_mode = m.mode == "branches"
+        show_mesh = self.robot is not None and self.mesh_toggle.value
+        guides, labels = self.guides.value, self.labels.value
         with self.server.atomic():
             self.mode.value = MODES[m.mode]
             self.preset.value = m.preset
@@ -425,48 +541,26 @@ class LabApp:
             self.play.value = m.play
             self.branch.value = branch_label(m.branch)
             self.angle.value = float(np.clip(m.offset_deg, -180, 180))
-            self.angle.disabled = m.mode in ("jacobian", "trajectory")
-            self.amplitude.visible = m.mode not in ("jacobian", "trajectory")
-            self.frequency.visible = m.mode != "jacobian"
-            self.branch_table.visible = m.mode in ("branches", "manifold")
-            self.path_kind.visible = self.path_plane.visible = (
-                self.path_radius.visible
-            ) = m.mode == "trajectory"
-            self.manifold_samples.visible = self.manifold_projection.visible = (
-                m.mode == "manifold"
-            )
-            self.path_root.visible = m.mode == "trajectory"
-            self.manifold_root.visible = m.mode == "manifold"
-            self.mesh_toggle.visible = not gallery_mode
             for slider, value in zip(self.joint_sliders, m.q):
                 slider.value = float(np.rad2deg(value))
-            for handle in (
-                self.arm,
-                self.joints,
-                self.circle,
-                self.axis,
-                self.target,
-                self.tcp,
-                self.target_label,
-                *self.sew_labels,
-            ):
-                handle.visible = not gallery_mode
-            if self.robot is not None:
-                self.robot.show_visual = not gallery_mode and self.mesh_toggle.value
-                if not gallery_mode:
-                    self.robot.update_cfg(m.q)
-            self.ellipsoid.visible = self.velocity.visible = (
-                self.ellipsoid_axes.visible
-            ) = m.mode == "jacobian"
+            self._sync_visibility(gallery_mode, show_mesh, guides, labels)
+            if show_mesh and not gallery_mode:
+                self.robot.update_cfg(m.q)
+            if gallery_mode and show_mesh:
+                self._ensure_gallery_robots()
             if gallery_mode:
                 solutions = m.gallery()
                 chains = m.gallery_chains()
                 table = ["| Branch | State | Min margin |", "|:--|:--|--:|"]
-                for branch, q, chain, (offset, bones, points, label, tcp) in zip(
-                    BRANCHES, solutions, chains, self.gallery
-                ):
+                for index, (
+                    branch,
+                    q,
+                    chain,
+                    (offset, bones, points, label, tcp),
+                ) in enumerate(zip(BRANCHES, solutions, chains, self.gallery)):
                     label.visible = tcp.visible = True
-                    bones.visible = points.visible = q is not None
+                    bones.visible = q is not None and not show_mesh
+                    points.visible = q is not None and guides and not show_mesh
                     tcp.wxyz = self.trimesh.transformations.quaternion_from_matrix(
                         m.target
                     )
@@ -478,7 +572,16 @@ class LabApp:
                     label.text = compact_branch + (
                         " · OK" if q is not None else " · no IK"
                     )
+                    self.gallery_selection[index].visible = (
+                        q is not None and branch == m.branch
+                    )
+                    if self.gallery_robots:
+                        self.gallery_robots[index].show_visual = (
+                            show_mesh and q is not None
+                        )
                     if q is not None:
+                        if show_mesh:
+                            self.gallery_robots[index].update_cfg(q)
                         locations = (
                             np.vstack((np.zeros(3), chain[[0, 2, 4, 7], :3, 3]))
                             + offset
@@ -500,19 +603,23 @@ class LabApp:
                         table.append(f"| {branch_label(branch)} | unavailable | — |")
                 self.branch_table.content = "\n".join(table)
             else:
-                for _, bones, points, label, tcp in self.gallery:
-                    bones.visible = points.visible = label.visible = tcp.visible = False
                 chain = m.chain()
                 locations = np.vstack((np.zeros(3), chain[[0, 2, 4, 7], :3, 3]))
-                self.arm.points = np.stack((locations[:-1], locations[1:]), axis=1)
-                self.joints.points = locations[1:4]
-                for handle, point in zip(self.sew_labels, locations[1:4]):
-                    handle.position = point + [0.04, 0, 0.02]
-                circle = elbow_circle(chain)
-                self.circle.visible = len(circle) > 1
-                if len(circle) > 1:
-                    self.circle.points = np.stack((circle[:-1], circle[1:]), axis=1)
-                self.axis.points = np.array([[locations[1], locations[3]]])
+                if not show_mesh:
+                    self.arm.points = np.stack((locations[:-1], locations[1:]), axis=1)
+                if guides:
+                    self.joints.points = locations[1:4]
+                    if labels:
+                        for handle, point in zip(self.sew_labels, locations[1:4]):
+                            handle.position = point + [0.04, 0, 0.02]
+                if guides and m.mode != "trajectory":
+                    circle = elbow_circle(chain)
+                    self.circle.visible = len(circle) > 1
+                    if len(circle) > 1:
+                        self.circle.points = np.stack((circle[:-1], circle[1:]), axis=1)
+                    self.axis.points = np.array([[locations[1], locations[3]]])
+                else:
+                    self.circle.visible = False
                 self.target.wxyz = self.trimesh.transformations.quaternion_from_matrix(
                     m.target
                 )
@@ -537,10 +644,6 @@ class LabApp:
                         [[origin, origin + 0.25 * (jacobian[:3] @ preferred)]]
                     )
                 elif m.mode == "trajectory":
-                    points = m.trajectory.points
-                    self.path_reference.points = np.stack(
-                        (points[:-1], points[1:]), axis=1
-                    )
                     trail = np.asarray(m.trail)
                     self.path_trace.visible = len(trail) > 1
                     if len(trail) > 1:
@@ -554,17 +657,23 @@ class LabApp:
                             (delta[:, 0], np.zeros(len(delta)), delta[:, 1])
                         ) * 6 + [1.5, 0, 0.75]
 
-                    self.path_plot_title.text = (
-                        f"TCP displacement ×6 · {PLANES[m.path_plane]}"
-                    )
-                    for label, coordinate in zip(
-                        self.path_plot_labels, m.trajectory.coordinate_labels
-                    ):
-                        label.text = "Δ" + coordinate
-                    reference, actual = project(points), project(trail)
-                    self.path_plot_reference.points = np.stack(
-                        (reference[:-1], reference[1:]), axis=1
-                    )
+                    # Path geometry is immutable; only the trace changes during play.
+                    if m.trajectory is not self._trajectory_render_path:
+                        points = m.trajectory.points
+                        self.path_reference.points = np.stack(
+                            (points[:-1], points[1:]), axis=1
+                        )
+                        reference = project(points)
+                        self.path_plot_reference.points = np.stack(
+                            (reference[:-1], reference[1:]), axis=1
+                        )
+                        self.path_plot_title.text = f"{PLANES[m.path_plane]} · TCP ×6"
+                        for label, coordinate in zip(
+                            self.path_plot_labels, m.trajectory.coordinate_labels
+                        ):
+                            label.text = "Δ" + coordinate
+                        self._trajectory_render_path = m.trajectory
+                    actual = project(trail)
                     self.path_plot_trace.visible = len(actual) > 1
                     if len(actual) > 1:
                         self.path_plot_trace.points = np.stack(
@@ -602,15 +711,17 @@ class LabApp:
             if force_metrics or now - self.last_metrics >= 0.1:
                 d = m.diagnostics()
                 self.metrics.content = (
-                    f"**{m.message}**\n\n"
+                    f"**{'Playing' if m.play else 'Paused'}** · {m.message}\n\n"
                     "| Metric | Value |\n|:--|--:|\n"
-                    f"| Backend | {m.backend.label} |\n"
-                    f"| TCP position error | {d['position_m'] * 1000:.5f} mm |\n"
-                    f"| TCP orientation error | {np.rad2deg(d['rotation_rad']):.5f}° |\n"
-                    f"| Joint-limit margin | {np.rad2deg(d['margin_rad']):.2f}° |\n"
-                    f"| Centering objective | {d['centering_cost']:.6f} |\n"
-                    f"| ‖J q̇_null‖ | {d['null_residual']:.2e} |"
+                    f"| TCP position error | {d['position_m'] * 1000:.4f} mm |\n"
+                    f"| TCP orientation error | {np.rad2deg(d['rotation_rad']):.4f}° |\n"
+                    f"| Joint-limit margin | {np.rad2deg(d['margin_rad']):.2f}° |"
                 )
+                if m.mode == "jacobian":
+                    self.metrics.content += (
+                        f"\n| Centering objective | {d['centering_cost']:.6f} |"
+                        f"\n| ‖J q̇_null‖ | {d['null_residual']:.2e} |"
+                    )
                 if m.mode == "trajectory":
                     self.metrics.content += f"\n| Accepted steps | {m.trajectory_steps} |\n| Peak joint step | {m.peak_joint_step:.5f} rad |"
                 self.last_metrics = now

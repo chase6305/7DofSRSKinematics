@@ -1,0 +1,45 @@
+# API reference
+
+## Quick start
+
+```python
+import numpy as np
+from kuka_iiwa_solver import KUKAiiwaSolver
+
+solver = KUKAiiwaSolver()
+seed = np.zeros(7)
+target = solver.get_fk(np.array([0.3, -0.5, 0.7, 1.0, -0.4, 0.8, -0.2]))
+success, joints = solver.get_ik(target, seed, num_samples=73)
+```
+
+The default `search_mode="continuous"` preserves the seed S/E/W branch and true arm angle first, which is intended for servoing. Exhaustive search remains available:
+
+```python
+success, joints = solver.get_ik(
+    target, seed, num_samples=73, search_mode="global"
+)
+```
+
+`get_configuration(q)` returns the shoulder, elbow, and wrist signs together with the continuous arm angle. Use it with `solve_configuration(target, configuration, seed)` for exact branch control.
+
+Repeated queries at the same TCP reuse the most recent target geometry across scalar configurations, configuration batches and NumPy IK search, retaining at most two elbow branches. Keys compare the exact contents of the local target, DH parameters and link lengths. Seeds, limits, weights and feasibility checks remain live on every call. Fixed-TCP self-motion benefits; moving targets rebuild geometry and incur a small cache-check overhead.
+
+## API and numerical conventions
+
+- `get_ik` and `solve_configuration` return `(False, None)` when no solution is found. Poses must be finite rigid homogeneous transforms and joint vectors must have shape `(7,)`; invalid inputs raise exceptions.
+- `continuous` returns a nearby feasible solution, preferring the seed branch, then falls back to global sampling. `global` uniformly samples `[-π, π)` across all eight branches and minimizes `||(q - seed) * weight||₂` among the samples. Finite sampling does not guarantee a continuous optimum or discovery of very narrow feasible intervals.
+- A per-call `num_samples` no longer changes the solver default. Set the default through `set_iteration_params(num_samples=...)`, with at least two samples. The legacy `num_sample` alias is accepted; other unknown IK arguments raise an error.
+- Every returned IK solution, including the seed fast path, respects joint limits and the positive elbow branch requested by `set_elbow_up(True)`. Periodic mapping works independently per joint without enumerating a Cartesian product.
+- `set_tcp(T)` sets the flange-to-TCP transform used by FK, IK, and Jacobians. Both `get_fk` and `get_all_fk_mat` return world-frame poses; the latter contains seven DH link frames followed by the TCP.
+- `get_fk(q, index=-1)` returns `(4, 4)` for `(7,)` input and `(N, 4, 4)` for `(N, 7)` input. `index=-1` selects the TCP, while `0..6` selects a DH link. Empty and strided batches are supported; outputs own their storage and only the required chain prefix is traversed. Batched configuration IK uses this TCP-only path for residual checks without allocating all link poses.
+- `get_all_fk_mat(q)` retains a list of eight matrices for `(7,)` input and returns an `(N, 8, 4, 4)` array for `(N, 7)` input. Batched DH evaluation supports empty and strided arrays; each call owns its output.
+- `get_jacobian(q)` returns an analytical `6×7` world-frame Jacobian: TCP linear velocity first, angular velocity last. The `step` argument remains accepted for compatibility but is no longer used for finite differences.
+- At shoulder or wrist singularities, both outer joints are solved together to minimize weighted seed distance within their limits. When shoulder and wrist centres coincide, the arm angle is undefined and `get_arm_angle` raises `ValueError`. Importing the library does not configure application logging.
+
+## Exact configuration batches
+
+`solve_configurations(target, configurations, seed)` solves multiple exact
+branch/arm-angle requests for one target and seed. It returns boolean `(N,)`
+success and `(N, 7)` joints in input order. Invalid rows are zero; mask them
+before use. Geometry is shared by elbow branch, and decomposition and FK
+validation are batched.

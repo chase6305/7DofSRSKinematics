@@ -171,3 +171,75 @@ def test_path_plane_switch_reanchors_and_updates_displacement_plot():
         assert not app.path_plane.visible
     finally:
         app.close()
+
+
+def test_trajectory_reference_is_reused_until_reanchored(monkeypatch):
+    from srs_viser.motions import CartesianPath
+
+    references = []
+    project = CartesianPath.project
+
+    def counted(path, points):
+        if points is path.points:
+            references.append(path)
+        return project(path, points)
+
+    monkeypatch.setattr(CartesianPath, "project", counted)
+    app = LabApp(Backend(), mode="trajectory", port=0, meshes=False)
+    try:
+        first = app.model.trajectory
+        assert references == [first]
+        app.commands.put(("play", True))
+        for _ in range(5):
+            assert app.step(1 / 30)
+        assert app.model.trajectory_steps == 5
+        assert len(app.model.trail) == 6
+        assert references == [first]
+        app.commands.put(("path_plane", "World XZ"))
+        app.step(1 / 30)
+        second = app.model.trajectory
+        assert second is not first
+        assert references == [first, second]
+        np.testing.assert_allclose(
+            app.path_reference.points[:, 0], second.points[:-1], atol=1e-7
+        )
+        assert [h.text for h in app.path_plot_labels] == ["Δx", "Δz"]
+    finally:
+        app.close()
+
+
+def test_branch_meshes_are_lazy_and_reused():
+    pytest.importorskip("yourdfpy")
+    app = LabApp(Backend(), port=0, meshes=True)
+    try:
+        assert not app.gallery_robots
+        app.mesh_toggle.value = False
+        app.commands.put(("mode", MODES["branches"]))
+        app.step(1 / 30)
+        assert not app.gallery_robots
+        app.mesh_toggle.value = True
+        app.commands.put(("mesh_toggle", True))
+        app.step(1 / 30)
+        robots = tuple(app.gallery_robots)
+        assert len(robots) == 8
+        assert [r.show_visual for r in robots] == [
+            q is not None for q in app.model.gallery()
+        ]
+        app.commands.put(("mode", MODES["arm-angle"]))
+        app.step(1 / 30)
+        assert not any(r.show_visual for r in robots)
+        app.commands.put(("mode", MODES["branches"]))
+        app.step(1 / 30)
+        assert tuple(app.gallery_robots) == robots
+        app.commands.put(("mode", MODES["arm-angle"]))
+        app.labels.value = True
+        app.commands.put(("labels", True))
+        app.step(1 / 30)
+        assert all(label.visible for label in app.sew_labels)
+        app.guides.value = False
+        app.commands.put(("guides", False))
+        app.step(1 / 30)
+        assert not app.circle.visible and not app.axis.visible
+        assert not any(label.visible for label in app.sew_labels)
+    finally:
+        app.close()
