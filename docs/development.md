@@ -101,7 +101,7 @@ visits reuse them. Integration checks compare the cached GLBs byte-for-byte
 with Viser's normal exports and verify independent joint updates.
 
 A local comparison against `8174d96` reduced the first gallery switch from
-489 ms to 230 ms (medians of seven interleaved trials after one warmup). It
+545 ms to 254 ms (medians of seven interleaved trials after one warmup). It
 includes IK and server scene construction, excluding initial app construction,
 browser, network and WebGL. The environment is Python 3.10, Viser 1.0.24,
 yourdfpy 0.0.60 and trimesh 4.12.2; hardware and load affect results. See the

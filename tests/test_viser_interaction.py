@@ -12,6 +12,44 @@ from srs_viser.model import MODES, PRESETS
 from srs_viser.motions import PROJECTIONS
 
 
+@pytest.mark.parametrize("message", ["Event loop is closed", "unexpected stop failure"])
+def test_close_handles_only_the_closed_event_loop_race(message):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    app = LabApp.__new__(LabApp)
+    app.closed = False
+    app.server = SimpleNamespace(stop=Mock(side_effect=RuntimeError(message)))
+    if message == "Event loop is closed":
+        app.close()
+        assert app.closed
+        app.close()
+        app.server.stop.assert_called_once()
+    else:
+        with pytest.raises(RuntimeError, match=message):
+            app.close()
+        assert not app.closed
+
+
+def test_startup_cleanup_preserves_the_scene_error(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    import viser
+
+    server = SimpleNamespace(
+        stop=Mock(side_effect=RuntimeError("Event loop is closed"))
+    )
+    monkeypatch.setattr(viser, "ViserServer", lambda **kwargs: server)
+
+    def failed_scene(app):
+        raise ValueError("robot asset unavailable")
+
+    monkeypatch.setattr(LabApp, "_build_scene", failed_scene)
+    with pytest.raises(ValueError, match="robot asset unavailable"):
+        LabApp(Backend(), port=0, meshes=False)
+    server.stop.assert_called_once()
+
+
 def test_idle_coalescing_mode_switches_and_reset(monkeypatch):
     backend = Backend()
     app = LabApp(backend, port=0, meshes=False)

@@ -111,7 +111,7 @@ class LabApp:
             self.server.on_client_connect(self._camera)
             self.render(force_metrics=True)
         except Exception:
-            self.server.stop()
+            self.close()
             raise
 
     def _line(self, name, points, color, width=3.0):
@@ -847,7 +847,13 @@ class LabApp:
 
     def close(self):
         if not self.closed:
-            self.server.stop()
+            try:
+                self.server.stop()
+            except RuntimeError as error:
+                # Viser 1.0 can close its loop between scheduling shutdown and
+                # waking message buffers. Shutdown is already complete then.
+                if str(error) != "Event loop is closed":
+                    raise
             self.closed = True
 
 
