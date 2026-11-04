@@ -7,18 +7,19 @@
     900
   ],
   "animation_fps": 15,
-  "animation_frames": 75,
+  "animation_frames": 150,
   "arm_angle_amplitude_deg": 25,
   "frequency_hz": 0.2,
-  "max_position_error_m": 2.0770370905276122e-16,
-  "max_rotation_error_rad": 5.045868990055059e-16,
-  "min_joint_limit_margin_rad": 1.0943951023931953,
+  "max_position_error_m": 4.577566798522237e-16,
+  "max_rotation_error_rad": 5.59259352151117e-16,
+  "min_joint_limit_margin_rad": 0.9652024178109948,
   "peak_joint_speed_rad_s": 0.900836545418938,
   "browser_exceptions": 0,
   "gui_checks": [
     "Experiment dropdown",
     "Play",
-    "Pause"
+    "Pause",
+    "Path plane dropdown"
   ],
   "snapshots": [
     {
@@ -64,6 +65,26 @@
         "null_residual": 4.326031775012762e-17
       },
       "trajectory_steps": 0
+    }
+  ],
+  "animation_sections": [
+    {
+      "mode": "arm-angle",
+      "frames": 75
+    },
+    {
+      "mode": "trajectory",
+      "frames": 75,
+      "fps": 15,
+      "path": "figure-eight",
+      "plane": "world-xy",
+      "frequency_hz": 0.2,
+      "accepted_steps": 150,
+      "max_position_error_m": 4.577566798522237e-16,
+      "max_rotation_error_rad": 5.59259352151117e-16,
+      "peak_joint_speed_rad_s": 0.2620439117207807,
+      "browser_exceptions": 0,
+      "min_joint_limit_margin_rad": 0.9652024178109948
     }
   ]
 }

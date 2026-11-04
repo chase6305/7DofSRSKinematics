@@ -4,7 +4,9 @@
 
 NumPy analytical kinematics for 7-DoF S-R-S arms, with a bundled KUKA iiwa 7 R800.
 
-![Fixed-TCP self-motion captured from the running Viser app](docs/media/demo.gif)
+![Recorded fixed-TCP self-motion and figure-eight TCP tracking](docs/media/demo.gif)
+
+Fixed-TCP self-motion → figure-eight tracking. Ten seconds of actual NumPy playback.
 
 - Analytical FK / IK, eight shoulder/elbow/wrist branches and continuous arm-angle control.
 - Batched FK, exact configuration solves, analytical Jacobians and null-space motion.

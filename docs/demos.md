@@ -108,8 +108,10 @@ These are captures of the running Viser app with the bundled R800 model.
 
 The [capture manifest](media/capture.json) records the backend, Viser version,
 simulation rate, pose residuals and joint-speed bound for the actual recording.
-The five-second GIF uses a 25° sweep at 0.2 Hz, recorded at 15 fps; it is not a
-measurement of solver or rendering throughput. Still images are 1440×900.
+The ten-second GIF joins two five-second recordings: a 25° fixed-TCP arm-angle
+sweep, then figure-eight TCP tracking at 0.2 Hz. Both run at 15 fps and the GIF
+loops; it is not a measurement of solver or rendering throughput. Still images
+are 1440×900. The manifest records both sections and their measured residuals.
 
 Scene visibility is refreshed after experiment or display edits. Playback
 updates the moving geometry; hidden branch robots are not toggled every frame.

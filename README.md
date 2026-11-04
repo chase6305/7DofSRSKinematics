@@ -4,7 +4,9 @@
 
 基于 NumPy 的 7 自由度 S-R-S 机械臂解析运动学，内置 KUKA iiwa 7 R800。
 
-![固定 TCP 的臂角自运动：实际 Viser 运行画面](docs/media/demo.gif)
+![固定 TCP 自运动与 8 字轨迹跟踪实录](docs/media/demo.gif)
+
+固定 TCP 自运动 → 8 字轨迹跟踪，10 秒 NumPy 实录。
 
 - 解析 FK / IK、八种肩肘腕构型与连续臂角控制。
 - 批量 FK、精确构型求解、解析雅可比与零空间运动。

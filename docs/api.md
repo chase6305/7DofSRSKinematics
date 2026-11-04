@@ -43,3 +43,10 @@ branch/arm-angle requests for one target and seed. It returns boolean `(N,)`
 success and `(N, 7)` joints in input order. Invalid rows are zero; mask them
 before use. Geometry is shared by elbow branch, and decomposition and FK
 validation are batched.
+
+
+Mixed shoulder/wrist requests in `solve_configurations` are decomposed together
+in at most two elbow groups. Output order, per-row validity, periodic mapping,
+seed-weighted singular solutions and live joint limits are preserved. This is
+a CPU geometry optimization in both repositories, including exact queries on
+a CUDA-configured Warp solver; global Warp kernels are unchanged.

@@ -57,6 +57,7 @@ def main():
         for branch in product((-1, 1), repeat=3)
         for psi in np.linspace(-np.pi, np.pi, 73)
     ]
+    gallery = [(branch, model.anchor_psi) for branch in product((-1, 1), repeat=3)]
 
     def scalar_fixed():
         return [backend.solve(target, branch, psi, seed) for branch, psi in fixed]
@@ -70,10 +71,15 @@ def main():
         valid, joints = backend.solve_many(target, manifold, seed)
         return list(joints[valid])
 
+    def batch_gallery():
+        valid, joints = backend.solve_many(target, gallery, seed)
+        return list(joints[valid])
+
     report = {"backend": backend.label, "repeats": args.repeats, "workloads": {}}
     for name, operation, requests in (
         ("fixed_tcp", scalar_fixed, args.frames),
         ("moving_tcp", scalar_moving, args.frames),
+        ("branch_batch", batch_gallery, len(gallery)),
         ("manifold_batch", batch_manifold, len(manifold)),
     ):
         operation()  # Warm imports, geometry and device transfers outside timing.

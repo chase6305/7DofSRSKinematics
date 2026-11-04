@@ -248,18 +248,17 @@ class SRSAnalyticalSolver(Solver, ABC):
         )
         angles = np.array([c.redundancy for c in configurations])
         local = self._local_target(target)
-        geometry = {}
-        for branch in np.unique(branches):
-            elbow = self._configuration(branch)[1]
+        for elbow in (1, -1):
             if self._is_elbow_up and elbow < 0:
                 continue
-            if elbow not in geometry:
-                geometry[elbow] = self._prepare_ik(local, elbow)
-            if geometry[elbow] is None:
+            rows = np.flatnonzero((branches & 2) == (0 if elbow > 0 else 2))
+            if not len(rows):
                 continue
-            rows = np.flatnonzero(branches == branch)
+            geometry = self._prepare_ik(local, elbow)
+            if geometry is None:
+                continue
             candidates = self._candidate_joint_angles(
-                geometry[elbow], angles[rows], branch, seed
+                geometry, angles[rows], branches[rows], seed
             )
             candidates, valid = self._map_to_limits(candidates, seed)
             output[rows[valid]] = candidates[valid]
@@ -474,9 +473,14 @@ class SRSAnalyticalSolver(Solver, ABC):
         return shoulder, wrist, joints[3]
 
     def _candidate_joint_angles(self, prepared, nsparams, rconf, joint_seed):
-        """Decompose one branch for a scalar or a vector of arm angles."""
+        """Decompose scalar requests or mixed branches sharing elbow geometry."""
         shoulder, wrist, elbow_angle = prepared
-        arm_config, _, wrist_config = self._configuration(rconf)
+        if isinstance(rconf, (int, np.integer)):
+            arm_config, _, wrist_config = self._configuration(rconf)
+        else:
+            rconf = np.asarray(rconf)
+            arm_config = np.where(rconf & 1, -1, 1)
+            wrist_config = np.where(rconf & 4, -1, 1)
         psi = np.asarray(nsparams)
         sine, cosine = np.sin(psi)[..., None, None], np.cos(psi)[..., None, None]
         r03 = shoulder[0] * sine + shoulder[1] * cosine + shoulder[2]
