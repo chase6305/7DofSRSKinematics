@@ -20,8 +20,6 @@ This tool requires the Warp repository's dependencies. It compares scalar NumPy,
 
 ## Tests and references
 
-
-
 ```bash
 pytest -q
 ```
@@ -36,7 +34,6 @@ The closed-form decomposition locates the wrist centre, solves the shoulder-elbo
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for development guidelines.
 
 See [urdf/README.md](../urdf/README.md) and [urdf/ASSET_LICENSE](../urdf/ASSET_LICENSE) for mesh provenance, regeneration, and the BSD-3-Clause asset license.
-
 
 ## Exact-configuration batch optimization
 
@@ -65,4 +62,32 @@ benchmark includes adapter/request construction and verifies TCP residuals:
 
 ```bash
 python tools/benchmark_srs.py --frames 180 --repeats 15
+```
+
+## CPU global search
+
+Global search now evaluates the branch-major arm-angle grid in the same two
+elbow groups as exact configuration batches. Continuous local search keeps its
+existing seed/branch priority. Global candidates retain their original order,
+so zero-weight ties and all-solution ordering stay deterministic.
+
+A local fixed-target comparison (Python 3.10, NumPy 2.2.6; nine interleaved
+repeats of 30 warmed calls, seed offset 0.2 rad) measured:
+
+| Arm-angle samples | Before | Grouped | Speedup |
+|--:|--:|--:|--:|
+| 73 | 0.717 ms | 0.455 ms | 1.58× |
+| 361 | 0.982 ms | 0.811 ms | 1.21× |
+
+Across 240 additional cases shared between the NumPy reference and CPU fallback,
+before/after results matched, including unequal/zero weights, shoulder/wrist
+singularities and all-solution requests. These are CPU timings, excluding the
+viewer; finite sampling still does not guarantee finding every feasible interval.
+The two repositories use different default limits, so compare before/after
+within each row rather than treating the tables as a backend ranking.
+
+Measure the current implementations with the cross-backend tool:
+
+```bash
+python tools/compare_backends.py --warp-repo ../7DofSRSKinematicsWarp --samples 40 --num-samples 73
 ```

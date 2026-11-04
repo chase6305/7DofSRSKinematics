@@ -231,12 +231,12 @@ def test_unreachable_and_collapsed_arm_fail_without_numerical_warnings():
         assert_pose(solver.get_fk(q), straight)
 
 
-def test_global_search_selects_weighted_best_sample_and_is_deterministic():
+@pytest.mark.parametrize("samples", [2, 17, 73])
+def test_global_search_selects_weighted_best_sample_and_is_deterministic(samples):
     solver = KUKAiiwaSolver()
     solver.set_position_limits([-2 * np.pi] * 7, [2 * np.pi] * 7)
     seed = JOINTS + 0.2
     target = solver.get_fk(JOINTS)
-    samples = 12
     candidates = []
     for signs in product((-1, 1), repeat=3):
         for psi in np.linspace(-np.pi, np.pi, samples, endpoint=False):

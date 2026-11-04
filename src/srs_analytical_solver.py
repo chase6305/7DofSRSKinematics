@@ -236,10 +236,8 @@ class SRSAnalyticalSolver(Solver, ABC):
         configurations = tuple(configurations)
         if any(not isinstance(c, SRSConfiguration) for c in configurations):
             raise TypeError("configurations must contain SRSConfiguration values")
-        output = np.zeros((len(configurations), 7))
-        success = np.zeros(len(configurations), dtype=bool)
         if not configurations:
-            return success, output
+            return np.zeros(0, dtype=bool), np.zeros((0, 7))
         branches = np.array(
             [
                 self._configuration_index(c.shoulder, c.elbow, c.wrist)
@@ -248,6 +246,17 @@ class SRSAnalyticalSolver(Solver, ABC):
         )
         angles = np.array([c.redundancy for c in configurations])
         local = self._local_target(target)
+        success, output = self._configuration_candidates(local, angles, branches, seed)
+        rows = np.flatnonzero(success)
+        if len(rows):
+            success[rows] = self._poses_match(self.get_fk(output[rows]), target)
+        output[~success] = 0
+        return success, output
+
+    def _configuration_candidates(self, local, angles, branches, seed):
+        """Decompose mixed branch/angle requests in their original input order."""
+        output = np.zeros((len(angles), 7))
+        success = np.zeros(len(angles), dtype=bool)
         for elbow in (1, -1):
             if self._is_elbow_up and elbow < 0:
                 continue
@@ -263,10 +272,6 @@ class SRSAnalyticalSolver(Solver, ABC):
             candidates, valid = self._map_to_limits(candidates, seed)
             output[rows[valid]] = candidates[valid]
             success[rows] = valid
-        rows = np.flatnonzero(success)
-        if len(rows):
-            success[rows] = self._poses_match(self.get_fk(output[rows]), target)
-        output[~success] = 0
         return success, output
 
     def get_jacobian(self, qpos: np.ndarray, step: float = 1e-7) -> np.ndarray:
@@ -713,19 +718,13 @@ class SRSAnalyticalSolver(Solver, ABC):
                         if self._matches_target(candidate, target_pose):
                             return True, candidate.copy()
 
-        # Batch every arm angle for each branch; shared geometry and NumPy
-        # arrays avoid hundreds of tiny thread-pool jobs and repeated FK calls.
-        joints_list = []
+        # Keep branch-major sample order while sharing the two elbow geometries.
         nsparams = np.linspace(-np.pi, np.pi, num=int(samples), endpoint=False)
-        for rconf in range(8):
-            if self._is_elbow_up and rconf & 2:
-                continue
-            candidates = self._candidate_joint_angles(
-                prepare(rconf), nsparams, rconf, joint_seed
-            )
-            candidates, valid = self._map_to_limits(candidates, joint_seed)
-            joints_list.append(candidates[valid])
-        joints_array = np.concatenate(joints_list)
+        branches = np.repeat(np.arange(8), len(nsparams))
+        valid, candidates = self._configuration_candidates(
+            local_target, np.tile(nsparams, 8), branches, joint_seed
+        )
+        joints_array = candidates[valid]
         weights = 1.0 if self.ik_nearst_weight is None else self.ik_nearst_weight
         if self.ik_nearst_weight is not None:
             scale = np.max(weights)
