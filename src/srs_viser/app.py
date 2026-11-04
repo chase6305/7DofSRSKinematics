@@ -344,12 +344,15 @@ class LabApp:
             )
             self.reset_button = gui.add_button("Reset pose")
             for index, q in enumerate(self.model.q):
+                lower = float(np.rad2deg(self.model.backend.lower[index]))
+                upper = float(np.rad2deg(self.model.backend.upper[index]))
                 handle = gui.add_slider(
                     f"J{index + 1} [deg]",
-                    float(np.rad2deg(self.model.backend.lower[index])),
-                    float(np.rad2deg(self.model.backend.upper[index])),
+                    lower,
+                    upper,
                     0.1,
                     float(np.rad2deg(q)),
+                    marks=((lower, f"{lower:g}"), (upper, f"{upper:g}")),
                 )
                 self.joint_sliders.append(handle)
                 handle.on_update(
