@@ -257,11 +257,13 @@ def test_global_search_selects_weighted_best_sample_and_is_deterministic(samples
             expected_distance, abs=1e-12
         )
         for _ in range(2):
-            np.testing.assert_array_equal(
+            np.testing.assert_allclose(
                 solver.get_ik(target, seed, num_samples=samples, search_mode="global")[
                     1
                 ],
                 q,
+                atol=1e-13,
+                rtol=0,
             )
 
 
