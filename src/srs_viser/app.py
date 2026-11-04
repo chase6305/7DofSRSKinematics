@@ -525,9 +525,14 @@ class LabApp:
         for index, (offset, *_handles) in enumerate(self.gallery):
             prefix = f"/gallery/branch{index}/mesh"
             self.server.scene.add_frame(prefix, position=offset, show_axes=False)
+            memo = shared_meshes.copy()
+            # SceneGraph.copy() drops derived caches, which may contain
+            # unpickleable dict views after Viser queries a fresh URDF graph.
+            graph = self._robot_description.scene.graph
+            memo[id(graph)] = graph.copy()
             robot = ViserUrdf(
                 _RobotMeshTarget(self.server, prefix + "/robot", self._robot_meshes),
-                deepcopy(self._robot_description, memo=shared_meshes.copy()),
+                deepcopy(self._robot_description, memo=memo),
                 root_node_name=prefix + "/robot",
             )
             self.gallery_robots.append(robot)

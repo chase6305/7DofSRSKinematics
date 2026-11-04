@@ -293,6 +293,23 @@ def test_branch_meshes_are_lazy_and_reused(monkeypatch):
         app.close()
 
 
+def test_branch_mode_starts_with_meshes_before_primary_joint_updates():
+    pytest.importorskip("yourdfpy")
+    # Starting directly in the gallery copies a freshly queried scene graph.
+    # Trimesh can cache unpickleable dict views there until the first joint edit.
+    app = LabApp(Backend(), mode="branches", port=0, meshes=True)
+    try:
+        assert len(app.gallery_robots) == 8
+        assert all(robot.show_visual for robot in app.gallery_robots)
+        assert not app.robot.show_visual
+        app.commands.put(("play", True))
+        assert app.step(1 / 30)
+        assert app.model.play
+        assert app.model.diagnostics()["position_m"] < 1e-5
+    finally:
+        app.close()
+
+
 def test_large_circle_plot_stays_above_floor_and_keeps_displacement_origin():
     app = LabApp(Backend(), mode="trajectory", port=0, meshes=False)
     try:
