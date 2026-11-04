@@ -10,7 +10,12 @@ python examples/viser_trajectory_demo.py --port 8084
 python examples/viser_manifold_demo.py --port 8085
 ```
 
-After installing `.[visualization]`, the same options are available through `srs-viser-lab`. Both repositories pin their visualization extras to the verified Viser 1.0.24 release.
+After installing `.[visualization]`, the same options are available through
+`srs-viser-lab`. Both repositories pin Viser 1.0.24 and require yourdfpy 0.0.60
+or newer. The latter explicitly extracts joint scalars, supporting the conversion
+rules enforced by [NumPy 2.4+](https://numpy.org/doc/stable/release/2.4.0-notes.html#raise-typeerror-on-attempt-to-convert-array-with-ndim-0-to-scalar).
+CI exercises interaction and asset tests on Python 3.10 and 3.12 with viewer
+dependencies installed.
 
 | Mode | Experiment |
 |:--|:--|

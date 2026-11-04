@@ -51,5 +51,11 @@
       "path_size_m": 0.09,
       "accepted_steps": 300
     }
-  ]
+  ],
+  "dependencies": {
+    "numpy": "2.2.6",
+    "viser": "1.0.24",
+    "yourdfpy": "0.0.60",
+    "trimesh": "4.12.2"
+  }
 }

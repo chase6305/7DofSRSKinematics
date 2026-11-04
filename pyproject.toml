@@ -20,7 +20,7 @@ classifiers = [
 [project.optional-dependencies]
 logging = ["coloredlogs>=15.0.1"]
 test = ["pytest>=7"]
-visualization = ["viser==1.0.24", "yourdfpy>=0.0.58", "trimesh>=4.0"]
+visualization = ["viser==1.0.24", "yourdfpy>=0.0.60", "trimesh>=4.0"]
 
 [project.scripts]
 srs-viser-lab = "srs_viser.app:main"
