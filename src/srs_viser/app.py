@@ -428,7 +428,9 @@ class LabApp:
         elif name == "joint":
             m.play = False
             q = m.q.copy()
-            q[value[0]] = value[1]
+            index, angle = value
+            # Browser degree rounding can cross a float32 radian limit by 1e-7.
+            q[index] = np.clip(angle, m.backend.lower[index], m.backend.upper[index])
             m.set_joints(q)
         elif name == "target":
             m.play = False
@@ -710,7 +712,9 @@ class LabApp:
                         self.path_plot_title.position = (
                             1.3,
                             0,
-                            float(max(reference[:, 2].max(), origin[2] + extent[1]) + 0.15),
+                            float(
+                                max(reference[:, 2].max(), origin[2] + extent[1]) + 0.15
+                            ),
                         )
                         for label, coordinate in zip(
                             self.path_plot_labels, m.trajectory.coordinate_labels

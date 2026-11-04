@@ -254,7 +254,10 @@ def test_large_circle_plot_stays_above_floor_and_keeps_displacement_origin():
         reference = app.path_plot_reference.points
         assert reference[..., 2].min() > 0.1
         zero = app.path_plot_axes.points[0, 0]
-        np.testing.assert_array_equal(app.path_plot_current.points[0], zero.astype(app.path_plot_current.points.dtype))
+        np.testing.assert_array_equal(
+            app.path_plot_current.points[0],
+            zero.astype(app.path_plot_current.points.dtype),
+        )
         expected = app.model.trajectory.project(app.model.trajectory.points) * 6
         actual = reference[:, 0][:, (0, 2)] - zero[[0, 2]]
         np.testing.assert_allclose(actual, expected[:-1], atol=2e-7)
@@ -265,5 +268,24 @@ def test_large_circle_plot_stays_above_floor_and_keeps_displacement_origin():
         np.testing.assert_allclose(
             app.path_plot_current.points[0], [1.5, 0, 0.75], atol=1e-7
         )
+    finally:
+        app.close()
+
+
+def test_joint_slider_degree_endpoints_stay_inside_physical_limits():
+    app = LabApp(Backend(), port=0, meshes=False)
+    try:
+        for index in range(7):
+            for limits in (app.model.backend.lower, app.model.backend.upper):
+                app.commands.put(("reset", None))
+                # A browser slider rounds displayed degrees to its 0.1-degree step.
+                endpoint = np.deg2rad(round(float(np.rad2deg(limits[index])), 1))
+                app.commands.put(("joint", (index, endpoint)))
+                app.step(1 / 30)
+                q = app.model.q
+                assert np.all(q >= app.model.backend.lower)
+                assert np.all(q <= app.model.backend.upper)
+                assert abs(q[index] - limits[index]) < 2e-7
+                assert app.model.solved and not app.model.play
     finally:
         app.close()
