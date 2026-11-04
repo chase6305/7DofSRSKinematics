@@ -14,6 +14,9 @@ from .backend import Backend
 from .commands import CommandQueue
 from .model import (
     BRANCHES,
+    DEFAULT_AMPLITUDE_DEG,
+    DEFAULT_FREQUENCY_HZ,
+    DEFAULT_PATH_SIZE_M,
     MODES,
     PRESETS,
     Experiment,
@@ -68,6 +71,7 @@ class LabApp:
         self.render_count = 0
         self._manifold_render_key = None
         self._trajectory_render_path = None
+        self._trajectory_plot_origin = np.array([1.5, 0, 0.75])
         self._display_key = None
         self.gallery_robots = []
         self.meshes_requested = meshes
@@ -214,7 +218,7 @@ class LabApp:
         self.path_plot_title = scene.add_label(
             "/trajectory/xy_title", "TCP XY displacement ×6", position=(1.3, 0, 1.4)
         )
-        self._line(
+        self.path_plot_axes = self._line(
             "/trajectory/xy_axes",
             np.array(
                 [[[1.5, 0, 0.75], [1.9, 0, 0.75]], [[1.5, 0, 0.75], [1.5, 0, 1.15]]]
@@ -653,9 +657,13 @@ class LabApp:
 
                     def project(values):
                         delta = m.trajectory.project(values)
-                        return np.column_stack(
-                            (delta[:, 0], np.zeros(len(delta)), delta[:, 1])
-                        ) * 6 + [1.5, 0, 0.75]
+                        return (
+                            np.column_stack(
+                                (delta[:, 0], np.zeros(len(delta)), delta[:, 1])
+                            )
+                            * 6
+                            + self._trajectory_plot_origin
+                        )
 
                     # Path geometry is immutable; only the trace changes during play.
                     if m.trajectory is not self._trajectory_render_path:
@@ -663,11 +671,47 @@ class LabApp:
                         self.path_reference.points = np.stack(
                             (points[:-1], points[1:]), axis=1
                         )
-                        reference = project(points)
+                        delta = m.trajectory.project(points) * 6
+                        center = (delta.min(axis=0) + delta.max(axis=0)) * 0.5
+                        self._trajectory_plot_origin = np.array(
+                            [1.5 - center[0], 0, 0.75 - center[1]]
+                        )
+                        reference = (
+                            np.column_stack(
+                                (delta[:, 0], np.zeros(len(delta)), delta[:, 1])
+                            )
+                            + self._trajectory_plot_origin
+                        )
                         self.path_plot_reference.points = np.stack(
                             (reference[:-1], reference[1:]), axis=1
                         )
                         self.path_plot_title.text = f"{PLANES[m.path_plane]} · TCP ×6"
+                        origin = self._trajectory_plot_origin
+                        extent = np.maximum(
+                            reference[:, (0, 2)].max(axis=0) - origin[[0, 2]] + 0.05,
+                            0.4,
+                        )
+                        self.path_plot_axes.points = np.array(
+                            [
+                                [origin, origin + [extent[0], 0, 0]],
+                                [origin, origin + [0, 0, extent[1]]],
+                            ]
+                        )
+                        self.path_plot_labels[0].position = origin + [
+                            extent[0] + 0.035,
+                            0,
+                            0,
+                        ]
+                        self.path_plot_labels[1].position = origin + [
+                            0,
+                            0,
+                            extent[1] + 0.035,
+                        ]
+                        self.path_plot_title.position = (
+                            1.3,
+                            0,
+                            float(max(reference[:, 2].max(), origin[2] + extent[1]) + 0.15),
+                        )
                         for label, coordinate in zip(
                             self.path_plot_labels, m.trajectory.coordinate_labels
                         ):
@@ -775,13 +819,13 @@ def main(default_demo="arm-angle"):
     parser.add_argument(
         "--path-size",
         type=float,
-        default=0.035,
+        default=DEFAULT_PATH_SIZE_M,
         help="Path size in meters [0.005, 0.1]",
     )
     parser.add_argument(
         "--frequency",
         type=float,
-        default=0.2,
+        default=DEFAULT_FREQUENCY_HZ,
         help="Reference frequency in Hz [0.05, 0.5]",
     )
     parser.add_argument(
@@ -793,7 +837,7 @@ def main(default_demo="arm-angle"):
     parser.add_argument(
         "--amplitude",
         type=float,
-        default=35.0,
+        default=DEFAULT_AMPLITUDE_DEG,
         help="Arm-angle sweep amplitude in degrees [5, 90]",
     )
     parser.add_argument(

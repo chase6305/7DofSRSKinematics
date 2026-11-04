@@ -4,9 +4,15 @@
 
 基于 NumPy 的 7 自由度 S-R-S 机械臂解析运动学，内置 KUKA iiwa 7 R800。
 
-![固定 TCP 自运动与 8 字轨迹跟踪实录](docs/media/demo.gif)
+**Demo 1 · 固定 TCP 自运动，臂角 ±90°**
 
-固定 TCP 自运动 → 8 字轨迹跟踪，10 秒 NumPy 实录。
+![末端固定、肘部大幅度自运动](docs/media/self-motion.gif)
+
+**Demo 2 · 8 字轨迹跟踪，180 × 90 mm**
+
+![8 字参考路径与实际末端轨迹](docs/media/trajectory.gif)
+
+两段独立的 NumPy 实录，每段 10 秒。
 
 - 解析 FK / IK、八种肩肘腕构型与连续臂角控制。
 - 批量 FK、精确构型求解、解析雅可比与零空间运动。
@@ -16,7 +22,7 @@
 
 ```bash
 python -m pip install -e '.[visualization]'
-srs-viser-lab --autoplay
+srs-viser-lab --demo arm-angle --amplitude 90 --frequency 0.1 --joint-speed 2 --autoplay
 ```
 
 打开 **http://127.0.0.1:8081**。通过 Experiment 切换实验，Play 暂停/继续；
@@ -30,7 +36,7 @@ srs-viser-lab --autoplay
 | TCP trajectory | 直线、圆、8 字路径与实际轨迹对照 |
 | Self-motion manifold | 固定 TCP 的关节空间分支曲线 |
 
-示例：`srs-viser-lab --demo trajectory --autoplay`。
+第二个 demo：`srs-viser-lab --demo trajectory --path-size 0.09 --frequency 0.1 --autoplay`。
 [更多运行方式、截图与 CSV 导出 →](docs/demos.md)
 
 ## Python API

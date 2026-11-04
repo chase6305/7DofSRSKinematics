@@ -4,9 +4,15 @@
 
 NumPy analytical kinematics for 7-DoF S-R-S arms, with a bundled KUKA iiwa 7 R800.
 
-![Recorded fixed-TCP self-motion and figure-eight TCP tracking](docs/media/demo.gif)
+**Demo 1 · Fixed-TCP self-motion, ±90° arm-angle sweep**
 
-Fixed-TCP self-motion → figure-eight tracking. Ten seconds of actual NumPy playback.
+![Fixed TCP with a large elbow sweep](docs/media/self-motion.gif)
+
+**Demo 2 · Figure-eight TCP tracking, 180 × 90 mm**
+
+![Figure-eight reference and actual TCP trace](docs/media/trajectory.gif)
+
+Two independent ten-second recordings of NumPy playback.
 
 - Analytical FK / IK, eight shoulder/elbow/wrist branches and continuous arm-angle control.
 - Batched FK, exact configuration solves, analytical Jacobians and null-space motion.
@@ -16,7 +22,7 @@ Fixed-TCP self-motion → figure-eight tracking. Ten seconds of actual NumPy pla
 
 ```bash
 python -m pip install -e '.[visualization]'
-srs-viser-lab --autoplay
+srs-viser-lab --demo arm-angle --amplitude 90 --frequency 0.1 --joint-speed 2 --autoplay
 ```
 
 Open **http://127.0.0.1:8081**. Select an Experiment, toggle Play, or drag the
@@ -30,7 +36,7 @@ TCP gizmo to choose a target. Live metrics show actual pose error and limit marg
 | TCP trajectory | Line, circle and figure-eight references versus actual FK |
 | Self-motion manifold | Fixed-TCP branches projected into joint space |
 
-Try `srs-viser-lab --demo trajectory --autoplay`.
+Demo 2: `srs-viser-lab --demo trajectory --path-size 0.09 --frequency 0.1 --autoplay`.
 [Controls, screenshots and CSV export →](docs/demos.md)
 
 ## Python API

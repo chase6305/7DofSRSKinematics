@@ -243,3 +243,27 @@ def test_branch_meshes_are_lazy_and_reused():
         assert not any(label.visible for label in app.sew_labels)
     finally:
         app.close()
+
+
+def test_large_circle_plot_stays_above_floor_and_keeps_displacement_origin():
+    app = LabApp(Backend(), mode="trajectory", port=0, meshes=False)
+    try:
+        app.commands.put(("path_kind", "Circle"))
+        app.commands.put(("path_radius", 0.1))
+        app.step(1 / 30)
+        reference = app.path_plot_reference.points
+        assert reference[..., 2].min() > 0.1
+        zero = app.path_plot_axes.points[0, 0]
+        np.testing.assert_array_equal(app.path_plot_current.points[0], zero.astype(app.path_plot_current.points.dtype))
+        expected = app.model.trajectory.project(app.model.trajectory.points) * 6
+        actual = reference[:, 0][:, (0, 2)] - zero[[0, 2]]
+        np.testing.assert_allclose(actual, expected[:-1], atol=2e-7)
+        assert app.path_plot_labels[0].position[0] > reference[..., 0].max()
+        assert app.path_plot_labels[1].position[2] > reference[..., 2].max()
+        app.commands.put(("path_kind", "Figure eight"))
+        app.step(1 / 30)
+        np.testing.assert_allclose(
+            app.path_plot_current.points[0], [1.5, 0, 0.75], atol=1e-7
+        )
+    finally:
+        app.close()

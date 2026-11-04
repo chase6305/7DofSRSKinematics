@@ -6,85 +6,50 @@
     1440,
     900
   ],
-  "animation_fps": 15,
-  "animation_frames": 150,
-  "arm_angle_amplitude_deg": 25,
-  "frequency_hz": 0.2,
-  "max_position_error_m": 4.577566798522237e-16,
-  "max_rotation_error_rad": 5.59259352151117e-16,
-  "min_joint_limit_margin_rad": 0.9652024178109948,
-  "peak_joint_speed_rad_s": 0.900836545418938,
+  "gif_size": [
+    1080,
+    675
+  ],
   "browser_exceptions": 0,
-  "gui_checks": [
-    "Experiment dropdown",
-    "Play",
-    "Pause",
-    "Path plane dropdown"
-  ],
-  "snapshots": [
-    {
-      "mode": "branches",
-      "diagnostics": {
-        "position_m": 0,
-        "rotation_rad": 0,
-        "margin_rad": 1.0943951023931953,
-        "centering_cost": 0.1298035244437953,
-        "null_residual": 0
-      },
-      "trajectory_steps": 0
-    },
-    {
-      "mode": "trajectory",
-      "diagnostics": {
-        "position_m": 2.0770370905276122e-16,
-        "rotation_rad": 4.594365265244385e-16,
-        "margin_rad": 0.9687503001320033,
-        "centering_cost": 0.14732065136824052,
-        "null_residual": 0
-      },
-      "trajectory_steps": 180
-    },
-    {
-      "mode": "manifold",
-      "diagnostics": {
-        "position_m": 1.6653345369377348e-16,
-        "rotation_rad": 2.64042920728464e-16,
-        "margin_rad": 1.0943951023931953,
-        "centering_cost": 0.18845005960181743,
-        "null_residual": 0
-      },
-      "trajectory_steps": 0
-    },
-    {
-      "mode": "jacobian",
-      "diagnostics": {
-        "position_m": 1.1102230246251565e-16,
-        "rotation_rad": 4.0650312327019683e-16,
-        "margin_rad": 1.0943951023931953,
-        "centering_cost": 0.12914373899166226,
-        "null_residual": 4.326031775012762e-17
-      },
-      "trajectory_steps": 0
-    }
-  ],
-  "animation_sections": [
+  "recordings": [
     {
       "mode": "arm-angle",
-      "frames": 75
+      "file": "self-motion.gif",
+      "frames": 150,
+      "fps": 15,
+      "simulation_fps": 30,
+      "simulated_seconds": 10,
+      "frequency_hz": 0.1,
+      "joint_speed_bound_rad_s": 2,
+      "peak_joint_speed_rad_s": 1.8325131670967647,
+      "max_position_error_m": 3.188872858294072e-16,
+      "max_rotation_error_rad": 7.311895462613621e-16,
+      "min_joint_limit_margin_rad": 0.7535432399027049,
+      "loop_closure_max_joint_delta_rad": 9.980904991380157e-14,
+      "amplitude_deg": 90,
+      "observed_offset_deg": [
+        -89.98026151273613,
+        89.98026151273609
+      ]
     },
     {
       "mode": "trajectory",
-      "frames": 75,
+      "file": "trajectory.gif",
+      "frames": 150,
       "fps": 15,
+      "simulation_fps": 30,
+      "simulated_seconds": 10,
+      "frequency_hz": 0.1,
+      "joint_speed_bound_rad_s": 1,
+      "peak_joint_speed_rad_s": 0.3632606010631789,
+      "max_position_error_m": 6.206335383118183e-16,
+      "max_rotation_error_rad": 6.649763268202179e-16,
+      "min_joint_limit_margin_rad": 0.791362771922266,
+      "loop_closure_max_joint_delta_rad": 2.1871393585115584e-14,
       "path": "figure-eight",
       "plane": "world-xy",
-      "frequency_hz": 0.2,
-      "accepted_steps": 150,
-      "max_position_error_m": 4.577566798522237e-16,
-      "max_rotation_error_rad": 5.59259352151117e-16,
-      "peak_joint_speed_rad_s": 0.2620439117207807,
-      "browser_exceptions": 0,
-      "min_joint_limit_margin_rad": 0.9652024178109948
+      "path_size_m": 0.09,
+      "accepted_steps": 300
     }
   ]
 }

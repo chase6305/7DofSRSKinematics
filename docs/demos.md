@@ -108,10 +108,31 @@ These are captures of the running Viser app with the bundled R800 model.
 
 The [capture manifest](media/capture.json) records the backend, Viser version,
 simulation rate, pose residuals and joint-speed bound for the actual recording.
-The ten-second GIF joins two five-second recordings: a 25° fixed-TCP arm-angle
-sweep, then figure-eight TCP tracking at 0.2 Hz. Both run at 15 fps and the GIF
-loops; it is not a measurement of solver or rendering throughput. Still images
-are 1440×900. The manifest records both sections and their measured residuals.
+The README embeds two independent looping GIFs, each ten seconds at 15 fps:
+
+- [Fixed-TCP self-motion](media/self-motion.gif): ±90° arm-angle sweep at 0.1 Hz,
+  with a 2 rad/s joint-speed bound.
+- [Figure-eight tracking](media/trajectory.gif): 180 × 90 mm in world XY at 0.1 Hz,
+  with a 1 rad/s joint-speed bound and fixed TCP orientation.
+
+Reproduce the recordings from the default Bent arm preset:
+
+```bash
+srs-viser-lab --demo arm-angle --amplitude 90 --frequency 0.1 --joint-speed 2 --autoplay
+srs-viser-lab --demo trajectory --path figure-eight --plane world-xy --path-size 0.09 --frequency 0.1 --joint-speed 1 --autoplay
+```
+
+Each recording advances 300 simulation steps at 30 Hz, verifies pose residuals,
+limits and speed at every step, and returns to its initial joint configuration.
+The manifest records measured extrema, speed, errors and loop closure separately
+for each GIF. Frames are browser captures of the actual app, resized from
+1440×900 to 1080×675; playback is not a throughput benchmark.
+
+Normal playback defaults to a ±60° sweep or a 0.05 m path size at 0.1 Hz, with
+a 1 rad/s speed bound. The path size is the radius for circles, half the line
+length, or half the figure-eight width; the figure-eight height equals its size.
+The six-times displacement plot recenters and expands its axes for larger paths.
+
 
 Scene visibility is refreshed after experiment or display edits. Playback
 updates the moving geometry; hidden branch robots are not toggled every frame.
