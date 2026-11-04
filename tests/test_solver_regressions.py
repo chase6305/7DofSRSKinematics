@@ -388,3 +388,20 @@ def test_singular_joint_limits_with_shifted_revolutions():
     ok, solution = solver.solve_configuration(target, solver.get_configuration(q), seed)
     assert ok
     np.testing.assert_allclose(solution, q, atol=1e-12)
+
+
+@pytest.mark.parametrize("scale", [1e-200, 1e200])
+def test_global_weight_ranking_is_invariant_to_finite_common_scale(scale):
+    solver = KUKAiiwaSolver()
+    q = np.array([0.3, -0.5, 0.7, 1.0, -0.4, 0.8, -0.2])
+    target, seed = solver.get_fk(q), q + 0.2
+    weights = np.array([1.0, 2.0, 0.0, 3.0, 1.0, 0.0, 4.0])
+    solver.set_ik_nearst_weight(weights)
+    ok, expected = solver.get_ik(target, seed, num_samples=73, search_mode="global")
+    assert ok
+    solver.set_ik_nearst_weight(weights * scale)
+    with np.errstate(over="raise", invalid="raise"):
+        ok, actual = solver.get_ik(target, seed, num_samples=73, search_mode="global")
+    assert ok
+    np.testing.assert_allclose(actual, expected, atol=1e-12, rtol=0)
+    np.testing.assert_array_equal(solver.get_ik_nearst_weight(), weights * scale)

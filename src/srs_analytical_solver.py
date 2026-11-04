@@ -727,6 +727,10 @@ class SRSAnalyticalSolver(Solver, ABC):
             joints_list.append(candidates[valid])
         joints_array = np.concatenate(joints_list)
         weights = 1.0 if self.ik_nearst_weight is None else self.ik_nearst_weight
+        if self.ik_nearst_weight is not None:
+            scale = np.max(weights)
+            if scale > 0:
+                weights = weights / scale
         distances = np.linalg.norm((joints_array - joint_seed) * weights, axis=1)
         # Stable sorting gives reproducible results even for zero-weight ties.
         for index in np.argsort(distances, kind="stable"):
