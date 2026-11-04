@@ -116,3 +116,27 @@ python tools/benchmark_viewer.py --repeats 7 --output viewer-benchmark.json
 
 The tool needs no browser. It checks all eight robot instances, their reuse and
 TCP residuals, and writes a new JSON file with dependency versions and samples.
+
+## Batched analytical Jacobians
+
+`get_jacobian` accepts `(N, 7)` and returns a contiguous `(N, 6, 7)` array,
+including empty/strided batches. It traverses all robots' DH chains together
+and stores only joint origins and axes. Scalar `(7,) → (6, 7)` behavior is
+retained. Tests compare scalar results and independent central FK differences,
+including base/TCP transforms, offsets, nonzero DH link lengths and singular
+joint arrangements.
+
+A local comparison measured a Python loop over the existing scalar API versus
+one batched call, including `np.stack` for the scalar results. Three warmups and
+15 interleaved repeats produced these medians; output arrays were bit-identical:
+
+| Robots | Scalar loop | Vectorized batch |
+|--:|--:|--:|
+| 8 | 0.234 ms | 0.051 ms |
+| 64 | 2.815 ms | 0.130 ms |
+| 4096 | 118.003 ms | 2.602 ms |
+
+The run uses Python 3.10 and NumPy 2.2.6 on CPU, excluding the viewer; hardware
+and load affect timings. See [raw measurements](benchmarks/jacobian.json).
+The cross-backend comparison command above also measures the primary NumPy
+solver's vectorized Jacobian and checks it against scalar reference results.

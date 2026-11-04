@@ -275,14 +275,36 @@ class SRSAnalyticalSolver(Solver, ABC):
         return success, output
 
     def get_jacobian(self, qpos: np.ndarray, step: float = 1e-7) -> np.ndarray:
-        """Return the analytical 6x7 geometric Jacobian in the world frame.
+        """Return analytical world-frame geometric Jacobians, linear rows first.
 
-        Rows are linear then angular velocity at the TCP. ``step`` is retained
-        for API compatibility and validated, but no finite differences are used.
+        Input (7,) returns (6, 7); input (N, 7) returns (N, 6, 7), including
+        empty/strided batches. ``step`` is retained for API compatibility and
+        validated, but no finite differences are used.
         """
-        qpos = self._validate_joints(qpos)
+        qpos = np.asarray(qpos, dtype=float)
+        if (
+            qpos.ndim not in (1, 2)
+            or qpos.shape[-1] != 7
+            or not np.all(np.isfinite(qpos))
+        ):
+            raise ValueError("qpos must be finite and have shape (7,) or (N, 7)")
         if not np.isfinite(step) or step <= 0.0:
             raise ValueError("step must be positive and finite")
+        if qpos.ndim == 2:
+            count = len(qpos)
+            transforms = self._joint_transforms(qpos)
+            pose = np.broadcast_to(self.world_to_base, (count, 4, 4))
+            origins, axes = np.empty((count, 7, 3)), np.empty((count, 7, 3))
+            for index in range(7):
+                origins[:, index] = pose[:, :3, 3]
+                axes[:, index] = pose[:, :3, 2]
+                pose = pose @ transforms[:, index]
+            tcp = (pose @ self.flange_to_ee)[:, :3, 3]
+            linear = np.cross(axes, tcp[:, None] - origins)
+            output = np.empty((count, 6, 7))
+            output[:, :3] = linear.transpose(0, 2, 1)
+            output[:, 3:] = axes.transpose(0, 2, 1)
+            return output
         poses = self._fk_chain(qpos)
         tcp = (poses[-1] @ self.flange_to_ee)[:3, 3]
         parents = np.stack([self.world_to_base] + poses[:-1])

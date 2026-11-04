@@ -1,0 +1,42 @@
+{
+  "date_utc": "2026-11-04",
+  "environment": {
+    "python": "3.10.0",
+    "numpy": "2.2.6"
+  },
+  "warmup_calls": 3,
+  "interleaved_repeats": 15,
+  "scope": "Existing scalar get_jacobian in a Python loop plus np.stack, versus one vectorized batch call. CPU, float64 outputs, no viewer. Inputs sampled uniformly in [-2,2] with RNG seed 6305.",
+  "batches": [
+    {
+      "batch": 1,
+      "scalar_loop_ms": 0.033653,
+      "vectorized_ms": 0.044655,
+      "max_absolute_delta": 0.0
+    },
+    {
+      "batch": 8,
+      "scalar_loop_ms": 0.233833,
+      "vectorized_ms": 0.051477,
+      "max_absolute_delta": 0.0
+    },
+    {
+      "batch": 64,
+      "scalar_loop_ms": 2.815388,
+      "vectorized_ms": 0.129957,
+      "max_absolute_delta": 0.0
+    },
+    {
+      "batch": 1024,
+      "scalar_loop_ms": 29.436508,
+      "vectorized_ms": 0.658429,
+      "max_absolute_delta": 0.0
+    },
+    {
+      "batch": 4096,
+      "scalar_loop_ms": 118.003197,
+      "vectorized_ms": 2.602285,
+      "max_absolute_delta": 0.0
+    }
+  ]
+}
