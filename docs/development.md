@@ -54,7 +54,7 @@ Recorded local comparisons (Python 3.10, NumPy 2.2.6):
 |:--|--:|--:|
 | 4096 Jacobians | Scalar loop: 118.003 ms | Batched: 2.602 ms |
 | First eight-branch gallery opening | `8174d96`: 545 ms | 254 ms |
-| 4096 batched FK, CPU | `7e18cdc`: 1.543 ms / 5.28 MB | 1.144 ms / 2.26 MB |
+| 4096 batched FK, CPU | `7e18cdc`: 1.727 ms / 5.28 MB | 1.272 ms / 2.03 MB |
 
 See [Jacobian samples](benchmarks/jacobian.json) and
 [viewer samples](benchmarks/viewer.json) for environments and raw trials.
