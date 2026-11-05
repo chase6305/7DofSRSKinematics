@@ -131,3 +131,46 @@ def test_unreachable_results_are_cached_and_only_last_target_is_retained(
     assert len(impl._ik_geometry_cache[1]) == 2
     assert impl._prepare_ik(far, 1) is None
     assert len(calls) == 4 and len(impl._ik_geometry_cache[1]) == 1
+
+
+@pytest.mark.parametrize("invalid", [True, 1.0, np.float64(1), np.bool_(True)])
+def test_viewer_request_cache_does_not_bypass_branch_type_validation(backend, invalid):
+    model = Experiment(backend)
+    requests = [((1, 1, 1), model.anchor_psi)]
+    valid, _ = backend.solve_many(model.target, requests, model.q)
+    assert valid[0]
+    with pytest.raises(ValueError, match="shoulder"):
+        backend.solve_many(model.target, [((invalid, 1, 1), model.anchor_psi)], model.q)
+    valid, _ = backend.solve_many(
+        model.target, [((np.int64(1), 1, 1), model.anchor_psi)], model.q
+    )
+    assert valid[0]
+
+
+def test_cached_batch_requests_keep_seed_weights_and_limits_live(backend):
+    model = Experiment(backend)
+    q = model.q.copy()
+    q[:3] = [0.8, 0, 0.8]
+    impl = geometry_impl(backend)
+    target = impl._get_fk(q) if hasattr(impl, "_get_fk") else impl.get_fk(q)
+    branch, psi = backend.configuration(q)
+    requests = [(tuple(int(value) for value in branch), psi)]
+    lower, upper = np.full(7, -4.0), np.full(7, 4.0)
+    lower[[0, 2]], upper[[0, 2]] = 0, 1
+    backend.solver.set_position_limits(lower, upper)
+    seed = q.copy()
+    seed[[0, 2]] = 0
+    valid, first = backend.solve_many(target, requests, seed)
+    assert valid[0]
+    np.testing.assert_allclose(first[0, [0, 2]], [0.8, 0.8], atol=2e-6)
+    impl.ik_nearst_weight[[0, 2]] = [1, 3]
+    valid, second = backend.solve_many(target, requests, seed)
+    assert valid[0]
+    np.testing.assert_allclose(second[0, [0, 2]], [1, 0.6], atol=2e-6)
+    seed[[0, 2]] = [0.9, 0.7]
+    valid, third = backend.solve_many(target, requests, seed)
+    assert valid[0]
+    np.testing.assert_allclose(third[0, [0, 2]], [0.9, 0.7], atol=2e-6)
+    backend.solver.set_position_limits(np.zeros(7), np.zeros(7))
+    valid, joints = backend.solve_many(target, requests, seed)
+    assert not valid.any() and not joints.any()

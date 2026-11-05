@@ -101,3 +101,47 @@ def test_periodic_limits_and_elbow_preference_in_batches():
     np.testing.assert_array_equal(ok, [True, False])
     np.testing.assert_allclose(result[0], q, atol=1e-12)
     np.testing.assert_array_equal(result[1], np.zeros(7))
+
+
+@pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
+def test_exact_arm_angle_precision_is_independent_of_scalar_storage(dtype):
+    solver = KUKAiiwaSolver()
+    solver.set_position_limits(np.full(7, -4.0), np.full(7, 4.0))
+    q = np.array([0.3, -0.5, 0.7, 1.0, -0.4, 0.8, -0.2])
+    target = solver.get_fk(q)
+    branch = solver.get_configuration(q)
+    for phase in (dtype(0.1), dtype(-2.7), dtype(65504)):
+        requested = SRSConfiguration(branch.shoulder, branch.elbow, branch.wrist, phase)
+        canonical = SRSConfiguration(
+            branch.shoulder, branch.elbow, branch.wrist, float(phase)
+        )
+        expected_ok, expected = solver.solve_configuration(target, canonical, q)
+        ok, actual = solver.solve_configuration(target, requested, q)
+        assert expected_ok and ok
+        np.testing.assert_array_equal(actual, expected)
+        mask, joints = solver.solve_configurations(target, [requested], q)
+        assert mask[0]
+        np.testing.assert_array_equal(joints[0], expected)
+        np.testing.assert_allclose(solver.get_fk(actual), target, atol=1e-10, rtol=0)
+
+
+def test_request_cache_detects_replaced_records_and_invalid_list_entries():
+    solver = KUKAiiwaSolver()
+    solver.set_position_limits(np.full(7, -4.0), np.full(7, 4.0))
+    q = np.array([0.3, -0.5, 0.7, 1.0, -0.4, 0.8, -0.2])
+    target = solver.get_fk(q)
+    branch = solver.get_configuration(q)
+    requests = [
+        SRSConfiguration(branch.shoulder, branch.elbow, branch.wrist, np.float16(0.1))
+    ]
+    ok, first = solver.solve_configurations(target, requests, q)
+    assert ok[0]
+    requests[0] = SRSConfiguration(branch.shoulder, branch.elbow, branch.wrist, 0.1)
+    ok, second = solver.solve_configurations(target, requests, q)
+    assert ok[0] and np.linalg.norm(first - second) > 1e-6
+    expected_ok, expected = solver.solve_configuration(target, requests[0], q)
+    assert expected_ok
+    np.testing.assert_array_equal(second[0], expected)
+    requests[0] = np.zeros(7)
+    with pytest.raises(TypeError, match="SRSConfiguration"):
+        solver.solve_configurations(target, requests, q)

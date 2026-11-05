@@ -42,6 +42,12 @@ centres, without assigning an undefined arm angle.
 `get_configuration(q)` returns the shoulder, elbow, and wrist signs together with the continuous arm
 angle. Use it with `solve_configuration(target, configuration, seed)` for exact branch control.
 
+Unchanged frozen configuration records reuse their branch/angle metadata in
+repeated batches. The viewer also reuses compiled requests for an unchanged
+branch grid. Targets, seeds, limits, weights and final FK checks remain live.
+Exact arm angles are evaluated in float64, including NumPy float16/float32
+scalar inputs.
+
 Repeated queries at the same TCP reuse up to two elbow geometries; seeds,
 limits and weights are evaluated on every call.
 

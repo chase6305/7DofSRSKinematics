@@ -247,18 +247,11 @@ class SRSAnalyticalSolver(Solver, ABC):
         """
         target = self._validate_pose(target_pose)
         seed = self._validate_joints(joint_seed, "joint_seed")
-        configurations = tuple(configurations)
-        if any(not isinstance(c, SRSConfiguration) for c in configurations):
-            raise TypeError("configurations must contain SRSConfiguration values")
+        configurations, branches, angles = self._prepare_configuration_requests(
+            configurations
+        )
         if not configurations:
             return np.zeros(0, dtype=bool), np.zeros((0, 7))
-        branches = np.array(
-            [
-                self._configuration_index(c.shoulder, c.elbow, c.wrist)
-                for c in configurations
-            ]
-        )
-        angles = np.array([c.redundancy for c in configurations])
         local = self._local_target(target)
         success, output = self._configuration_candidates(local, angles, branches, seed)
         rows = np.flatnonzero(success)
@@ -266,6 +259,40 @@ class SRSAnalyticalSolver(Solver, ABC):
             success[rows] = self._poses_match(self.get_fk(output[rows]), target)
         output[~success] = 0
         return success, output
+
+    def _prepare_configuration_requests(self, configurations):
+        """Reuse one batch of unchanged frozen configuration objects."""
+        configurations = tuple(configurations)
+        cached = getattr(self, "_configuration_request_cache", None)
+        if cached is not None and (
+            configurations is cached[0]
+            or len(configurations) == len(cached[0])
+            and all(
+                current is previous
+                for current, previous in zip(configurations, cached[0])
+            )
+        ):
+            return cached
+        if any(not isinstance(c, SRSConfiguration) for c in configurations):
+            raise TypeError("configurations must contain SRSConfiguration values")
+        branches = np.fromiter(
+            (
+                (c.shoulder < 0) | ((c.elbow < 0) << 1) | ((c.wrist < 0) << 2)
+                for c in configurations
+            ),
+            dtype=int,
+            count=len(configurations),
+        )
+        angles = np.fromiter(
+            (c.redundancy for c in configurations),
+            dtype=float,
+            count=len(configurations),
+        )
+        branches.setflags(write=False)
+        angles.setflags(write=False)
+        cached = configurations, branches, angles
+        self._configuration_request_cache = cached
+        return cached
 
     def _configuration_candidates(
         self, local, angles, branches, seed, limit_tolerance=1e-12
@@ -508,7 +535,7 @@ class SRSAnalyticalSolver(Solver, ABC):
             rconf = np.asarray(rconf)
             arm_config = np.where(rconf & 1, -1, 1)
             wrist_config = np.where(rconf & 4, -1, 1)
-        psi = np.asarray(nsparams)
+        psi = np.asarray(nsparams, dtype=float)
         sine, cosine = np.sin(psi)[..., None, None], np.cos(psi)[..., None, None]
         r03 = shoulder[0] * sine + shoulder[1] * cosine + shoulder[2]
         r47 = wrist[0] * sine + wrist[1] * cosine + wrist[2]
