@@ -13,6 +13,7 @@ Keep the Warp repository as a sibling checkout, or set `SRS_NUMPY_REPO` when
 running its `test/test_backend_consistency.py`. Those checks compare FK,
 Jacobians, all eight branches and global solution selection. See
 [CONTRIBUTING.md](../CONTRIBUTING.md) for development conventions.
+The Python 3.8 CI job uses NumPy 1.21.6 to check the minimum supported NumPy series.
 
 ## Solver design
 

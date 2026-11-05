@@ -76,9 +76,9 @@ class SRSAnalyticalSolver(Solver, ABC):
 
     def _dh_calc(self, d, alpha, a, theta) -> np.ndarray:
         """Build standard DH transforms, broadcasting over joint arrays."""
-        d, alpha, a, theta = np.broadcast_arrays(d, alpha, a, theta)
+        shape = np.broadcast(d, alpha, a, theta).shape
         return self._fill_dh(
-            np.zeros(theta.shape + (4, 4)),
+            np.zeros(shape + (4, 4)),
             d,
             a,
             np.cos(theta),
@@ -113,8 +113,9 @@ class SRSAnalyticalSolver(Solver, ABC):
             yield from transforms
             return
         d, alpha, a, theta = self.dh_params[:stop].T
-        angles = qpos[:, :stop] + theta
-        ct, st = np.cos(angles), np.sin(angles)
+        ct = qpos[:, :stop] + theta
+        st = np.sin(ct)
+        np.cos(ct, out=ct)
         ca, sa = np.cos(alpha), np.sin(alpha)
         transform = np.zeros((len(qpos), 4, 4))
         for index in range(stop):
@@ -793,7 +794,7 @@ class SRSAnalyticalSolver(Solver, ABC):
         ):
             raise IndexError("index must be -1 or an integer between 0 and 6")
         stop = 7 if index == -1 else index + 1
-        transform = self.world_to_base.copy()
+        transform = self.world_to_base
         for joint_transform in self._iter_joint_transforms(qpos, stop):
             transform = transform @ joint_transform
         return transform @ self.flange_to_ee if index == -1 else transform
