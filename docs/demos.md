@@ -9,7 +9,7 @@ srs-viser-lab --demo arm-angle
 Select an experiment in the page or with `--demo`:
 
 | Mode | Experiment |
-|:--|:--|
+| :-- | :-- |
 | `arm-angle` | Fixed-TCP self-motion, shoulder/elbow/wrist markers and the geometric elbow circle. |
 | `branches` | Eight S/E/W configurations with availability and joint-limit margins. Display tiles share one local target and arm angle. |
 | `jacobian` | Linear velocity ellipsoid and joint centering corrected back to the fixed TCP. |
@@ -32,13 +32,15 @@ benchmark.
 
 ## Controls and interpretation
 
-Play pauses/resumes without losing phase. Joint controls, Pose preset and the
-TCP gizmo choose a new target; pause before dragging the gizmo. **Scene & legend**
+Play pauses/resumes without losing phase. **Joints**, **Preset** and the
+TCP gizmo choose a new target; pause before dragging the gizmo. **Scene**
 toggles meshes, guides and joint labels. **Reset view** affects your own browser.
+**Help** contains the color legend and experiment notes; **Details** contains branch
+tables and additional diagnostics.
 `--no-mesh` keeps the geometric skeleton; `--port` changes the port. The server
 binds to `127.0.0.1` by default.
 
-Automatic playback respects **Joint speed bound** using direct joint changes.
+Automatic playback respects **Speed** using direct joint changes.
 It reduces progress near constraints and pauses at the last feasible pose if
 no valid step remains. Actual frequency can be below the reference frequency.
 Manual pose selection is immediate. Changing pose, branch, arm angle, amplitude
@@ -89,5 +91,5 @@ arm-angle sweep.
 ## Other recorded views
 
 | Eight S/E/W branches | Jacobian null space | Self-motion manifold |
-|:--|:--|:--|
+| :-- | :-- | :-- |
 | ![Eight robot configurations](media/branches.png) | ![Velocity ellipsoid and joint centering](media/jacobian.png) | ![Fixed-TCP joint-space curves](media/manifold.png) |

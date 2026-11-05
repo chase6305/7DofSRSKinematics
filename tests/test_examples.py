@@ -10,7 +10,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.mark.parametrize("mode", ["continuous", "global"])
+@pytest.mark.parametrize("mode", ["continuous", "global", "interval"])
 def test_headless_validation_without_visualization_dependencies(mode):
     script = """
 import importlib.abc

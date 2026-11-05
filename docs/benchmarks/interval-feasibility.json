@@ -1,0 +1,13 @@
+{
+  "cases": 1200,
+  "dense_arm_angle_samples": 2048,
+  "seed": 96216,
+  "both_succeeded": 327,
+  "both_failed": 800,
+  "interval_only": 73,
+  "dense_only": 0,
+  "max_interval_position_error_m": 4.6049134893939224e-14,
+  "max_interval_rotation_error_rad": 4.900212484945113e-14,
+  "command": "PYTHONPATH=src OPENBLAS_NUM_THREADS=1 python -c 'import runpy; runpy.run_path(\"tests/test_interval_search.py\")[\"test_interval_covers_dense_grid_feasible_cases\"](1200,2048)'",
+  "scope": "Extended run of the committed regression generator; routine tests use 64 cases and 257 arm-angle samples. Both-failed cases are not certified unreachable."
+}

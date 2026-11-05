@@ -1,0 +1,55 @@
+{
+  "q": [
+    0.3,
+    -0.5,
+    0.7,
+    1.0,
+    -0.4,
+    0.8,
+    -0.2
+  ],
+  "seed": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "limit_half_width_rad": 0.0001,
+  "arm_angle_rad": -2.7474142555567918,
+  "numpy": {
+    "exact_success": true,
+    "position_error_m": 5.551115123125783e-17,
+    "global_73_success": false,
+    "interval_success": true,
+    "interval_position_error_m": 1.2412670766236366e-16,
+    "continuous_success": true
+  },
+  "fallback": {
+    "exact_success": true,
+    "global_73_success": false,
+    "interval_success": true,
+    "interval_position_error_m": 0.0,
+    "interval_geometry_device": "cpu",
+    "output_device": "cpu",
+    "continuous_success": true
+  },
+  "warp_cpu": {
+    "exact_success": true,
+    "global_73_success": false,
+    "interval_success": true,
+    "interval_position_error_m": 5.960464477539063e-08,
+    "interval_geometry_device": "cpu",
+    "output_device": "cpu"
+  },
+  "warp_cuda": {
+    "exact_success": true,
+    "global_73_success": false,
+    "interval_success": true,
+    "interval_position_error_m": 6.664001972467304e-08,
+    "interval_geometry_device": "cpu",
+    "output_device": "cuda:0"
+  }
+}

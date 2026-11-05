@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Measure exact IK on fixed/moving TCPs and batched self-motion sampling."""
+"""Measure exact IK, self-motion batches and repeated interval queries."""
 
 import argparse
 import json
+import platform
 import sys
 import time
 from itertools import product
@@ -75,12 +76,37 @@ def main():
         valid, joints = backend.solve_many(target, gallery, seed)
         return list(joints[valid])
 
-    report = {"backend": backend.label, "repeats": args.repeats, "workloads": {}}
+    def interval_queries(reuse_boundaries):
+        solver = backend.solver
+        geometry = getattr(solver, "_geometry_impl", solver)
+        results = []
+        for _ in range(args.frames):
+            if not reuse_boundaries:
+                geometry._ik_boundary_cache = None
+            ok, joints = solver.get_ik(target, seed + 0.03, search_mode="interval")
+            if NUMPY_REPO:
+                results.append(joints if ok else None)
+            else:
+                results.append(
+                    joints[0, 0].detach().cpu().numpy() if bool(ok[0]) else None
+                )
+        return results
+
+    report = {
+        "backend": backend.label,
+        "python": platform.python_version(),
+        "numpy": np.__version__,
+        "repeats": args.repeats,
+        "workloads": {},
+    }
+    uncached_interval = None
     for name, operation, requests in (
         ("fixed_tcp", scalar_fixed, args.frames),
         ("moving_tcp", scalar_moving, args.frames),
         ("branch_batch", batch_gallery, len(gallery)),
         ("manifold_batch", batch_manifold, len(manifold)),
+        ("interval_uncached", lambda: interval_queries(False), args.frames),
+        ("interval_cached", lambda: interval_queries(True), args.frames),
     ):
         operation()  # Warm imports, geometry and device transfers outside timing.
         times = []
@@ -90,6 +116,10 @@ def main():
             times.append((time.perf_counter() - started) * 1000)
         if not result or any(q is None for q in result):
             raise AssertionError(f"{name} failed to solve a benchmark pose")
+        if name == "interval_uncached":
+            uncached_interval = np.array(result)
+        elif name == "interval_cached":
+            np.testing.assert_array_equal(result, uncached_interval)
         actual = backend.chains(np.asarray(result))[:, -1]
         expected = moving if name == "moving_tcp" else [target] * len(result)
         errors = np.array(
@@ -102,6 +132,7 @@ def main():
             "requests": requests,
             "valid_solutions": len(result),
             "median_ms": median,
+            "raw_ms": times,
             "microseconds_per_request": median * 1000 / requests,
             "max_position_error_m": float(errors[:, 0].max()),
             "max_rotation_error_rad": float(errors[:, 1].max()),

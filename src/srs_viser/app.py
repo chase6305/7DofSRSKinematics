@@ -27,14 +27,6 @@ from .model import (
 )
 from .motions import PATHS, PLANES, PROJECTIONS, manifold_segments
 
-DESCRIPTIONS = {
-    "arm-angle": "**Fixed tool. Moving elbow.** Sweep the arm angle to explore the robot's extra degree of freedom.",
-    "branches": "**One target. Eight configurations.** Compare shoulder, elbow and wrist branches at the same local TCP.",
-    "jacobian": "**Keep the tool still.** Move joints toward their centers through the full Jacobian null space.",
-    "trajectory": "**Draw with the TCP.** Follow a line, circle or figure eight with fixed tool orientation.",
-    "manifold": "**See the solution space.** Project fixed-TCP self-motion onto three joint coordinates.",
-}
-
 LEGENDS = {
     "arm-angle": "Orange: geometric elbow circle. Pink: elbow. Teal: wrist. Some arm angles are excluded by joint limits.",
     "branches": "Tiles are translated for display; local targets and arm angles are identical. An amber ring marks the selected branch. Unavailable solutions are hidden.",
@@ -313,67 +305,63 @@ class LabApp:
             brand_color=(238, 155, 63),
             show_share_button=False,
         )
-        gui.add_markdown(
-            f"## SRS Kinematics\n**iiwa 7 R800** · {self.model.backend.label}"
-        )
         self.mode = gui.add_dropdown(
             "Experiment", tuple(MODES.values()), initial_value=MODES[self.model.mode]
         )
-        self.description = gui.add_markdown(DESCRIPTIONS[self.model.mode])
         self.play = gui.add_checkbox("Play", False)
         self.metrics = gui.add_markdown("")
-        with gui.add_folder("Experiment controls"):
+        with gui.add_folder("Controls"):
             self.branch = gui.add_dropdown(
-                "S/E/W branch",
+                "Branch",
                 tuple(map(branch_label, BRANCHES)),
                 initial_value=branch_label(self.model.branch),
             )
-            self.angle = gui.add_slider("Arm angle offset [deg]", -180, 180, 0.5, 0.0)
+            self.angle = gui.add_slider("Arm angle [deg]", -180, 180, 0.5, 0.0)
             self.amplitude = gui.add_slider(
-                "Sweep amplitude [deg]", 5, 90, 1, self.model.amplitude
+                "Amplitude [deg]", 5, 90, 1, self.model.amplitude
             )
             self.frequency = gui.add_slider(
                 "Frequency [Hz]", 0.05, 0.5, 0.05, self.model.frequency
             )
             self.path_kind = gui.add_dropdown(
-                "Cartesian path",
+                "Path",
                 tuple(PATHS.values()),
                 initial_value=PATHS[self.model.path_kind],
             )
             self.path_plane = gui.add_dropdown(
-                "Path plane",
+                "Plane",
                 tuple(PLANES.values()),
                 initial_value=PLANES[self.model.path_plane],
             )
             self.path_radius = gui.add_slider(
-                "Path size [m]", 0.005, 0.1, 0.005, self.model.path_radius
+                "Size [m]", 0.005, 0.1, 0.005, self.model.path_radius
             )
             self.max_joint_speed = gui.add_slider(
-                "Joint speed bound [rad/s]", 0.1, 2.0, 0.1, self.model.max_joint_speed
+                "Speed [rad/s]",
+                0.1,
+                2.0,
+                0.1,
+                self.model.max_joint_speed,
+                hint="Maximum joint speed during playback.",
             )
             self.manifold_samples = gui.add_slider("Samples / branch", 17, 145, 8, 73)
             self.manifold_projection = gui.add_dropdown(
-                "Projection axes", tuple(PROJECTIONS), initial_value="J1 / J3 / J5"
+                "Axes", tuple(PROJECTIONS), initial_value="J1 / J3 / J5"
             )
-        with gui.add_folder("Scene & legend", expand_by_default=False):
+        with gui.add_folder("Scene", expand_by_default=False):
             self.mesh_toggle = gui.add_checkbox(
-                "Show robot mesh", self.robot is not None, disabled=self.robot is None
+                "Robot", self.robot is not None, disabled=self.robot is None
             )
-            self.guides = gui.add_checkbox("Geometry guides", True)
-            self.labels = gui.add_checkbox("Joint labels", False)
+            self.guides = gui.add_checkbox("Guides", True)
+            self.labels = gui.add_checkbox("Labels", False)
             self.view_button = gui.add_button("Reset view")
-            self.legend = gui.add_markdown(LEGENDS[self.model.mode])
-            gui.add_markdown(
-                "Drag the TCP gizmo to set a target. Playback respects the joint-speed bound and pauses at infeasible steps."
-            )
-        with gui.add_folder(
-            "Branch details", expand_by_default=False
-        ) as self.branch_details:
+        with gui.add_folder("Details", expand_by_default=False) as self.branch_details:
             self.branch_table = gui.add_markdown("")
+            self.diagnostics = gui.add_markdown("")
         self.joint_sliders = []
-        with gui.add_folder("Joint controls / new target", expand_by_default=False):
+        with gui.add_folder("Joints", expand_by_default=False):
             self.preset = gui.add_dropdown(
-                "Pose preset", tuple(PRESETS), initial_value=self.model.preset
+                "Preset", tuple(PRESETS), initial_value=self.model.preset
             )
             self.reset_button = gui.add_button("Reset pose")
             for index, q in enumerate(self.model.q):
@@ -397,6 +385,13 @@ class LabApp:
                         ),
                     )
                 )
+        with gui.add_folder("Help", expand_by_default=False):
+            gui.add_markdown(f"**iiwa 7 R800** · {self.model.backend.label}")
+            self.legend = gui.add_markdown(LEGENDS[self.model.mode])
+            gui.add_markdown(
+                "Pause to drag the TCP. Use Joints to set a new pose. "
+                "Playback slows near limits and pauses when no feasible step remains."
+            )
         for name in (
             "mode",
             "preset",
@@ -455,7 +450,6 @@ class LabApp:
         m = self.model
         if name == "mode":
             m.set_mode(next(key for key, label in MODES.items() if label == value))
-            self.description.content = DESCRIPTIONS[m.mode]
             self.legend.content = LEGENDS[m.mode]
             for client in self.server.get_clients().values():
                 self._camera(client)
@@ -541,10 +535,10 @@ class LabApp:
             "trajectory",
         )
         self.frequency.visible = mode != "jacobian"
-        self.branch_table.visible = self.branch_details.visible = mode in (
-            "branches",
-            "manifold",
-        )
+        self.branch_table.visible = mode in ("branches", "manifold")
+        self.diagnostics.visible = mode in ("jacobian", "trajectory")
+        self.branch_details.visible = mode != "arm-angle"
+        self.branch.visible = mode != "jacobian"
         self.path_kind.visible = self.path_plane.visible = self.path_radius.visible = (
             mode == "trajectory"
         )
@@ -804,20 +798,31 @@ class LabApp:
             now = time.perf_counter()
             if force_metrics or now - self.last_metrics >= 0.1:
                 d = m.diagnostics()
+                status = "Playing" if m.play else "Paused"
                 self.metrics.content = (
-                    f"**{'Playing' if m.play else 'Paused'}** · {m.message}\n\n"
-                    "| Metric | Value |\n|:--|--:|\n"
-                    f"| TCP position error | {d['position_m'] * 1000:.4f} mm |\n"
-                    f"| TCP orientation error | {np.rad2deg(d['rotation_rad']):.4f}° |\n"
-                    f"| Joint-limit margin | {np.rad2deg(d['margin_rad']):.2f}° |"
+                    f"**{status}**\n\n"
+                    "| Position | Rotation | Limit margin |\n|--:|--:|--:|\n"
+                    f"| {d['position_m'] * 1000:.3f} mm "
+                    f"| {np.rad2deg(d['rotation_rad']):.3f}° "
+                    f"| {np.rad2deg(d['margin_rad']):.1f}° |"
                 )
+                # Surface a stop reason without repeating routine playback messages.
+                if not m.play and not m.message.startswith(
+                    ("Ready", "Fixed TCP /", "Tracking /", "Joint centering /")
+                ):
+                    self.metrics.content += f"\n\n{m.message}"
                 if m.mode == "jacobian":
-                    self.metrics.content += (
-                        f"\n| Centering objective | {d['centering_cost']:.6f} |"
-                        f"\n| ‖J q̇_null‖ | {d['null_residual']:.2e} |"
+                    self.diagnostics.content = (
+                        "| Metric | Value |\n|:--|--:|\n"
+                        f"| Centering objective | {d['centering_cost']:.6f} |\n"
+                        f"| ‖J q̇_null‖ | {d['null_residual']:.2e} |"
                     )
-                if m.mode == "trajectory":
-                    self.metrics.content += f"\n| Accepted steps | {m.trajectory_steps} |\n| Peak joint step | {m.peak_joint_step:.5f} rad |"
+                elif m.mode == "trajectory":
+                    self.diagnostics.content = (
+                        "| Metric | Value |\n|:--|--:|\n"
+                        f"| Accepted steps | {m.trajectory_steps} |\n"
+                        f"| Peak joint step | {m.peak_joint_step:.5f} rad |"
+                    )
                 self.last_metrics = now
         self.render_count += 1
 
