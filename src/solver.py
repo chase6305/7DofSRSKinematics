@@ -223,14 +223,13 @@ class Solver(ISolver):
         mapped, valid = self._map_to_limits(q, joint_seed, active_qmask)
         return mapped if valid else []
 
-    def _map_to_limits(self, q, joint_seed, active_qmask=None):
+    def _map_to_limits(self, q, joint_seed, active_qmask=None, tolerance=1e-12):
         """Map (..., dof) candidates independently in O(candidates * dof).
 
         For non-negative weights, each periodic joint can minimize its own
         seed distance; a Cartesian product of periodic values is unnecessary.
         """
         period = 2.0 * np.pi
-        tolerance = 1e-12
         lower, upper = self.lower_position_limits, self.upper_position_limits
         minimum = np.ceil((lower - q - tolerance) / period)
         maximum = np.floor((upper - q + tolerance) / period)

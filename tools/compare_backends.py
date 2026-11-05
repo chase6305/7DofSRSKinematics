@@ -18,11 +18,23 @@ def main():
     )
     parser.add_argument("--samples", type=int, default=40)
     parser.add_argument("--num-samples", type=int, default=73)
+    parser.add_argument(
+        "--search-mode", choices=("global", "interval"), default="global"
+    )
+    parser.add_argument(
+        "--limit-half-width",
+        type=float,
+        help="Validate a narrow joint box around one pose",
+    )
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--device", default="cpu")
     args = parser.parse_args()
     if args.samples < 1 or args.num_samples < 2 or args.repeats < 1:
         parser.error("samples/repeats must be positive and num-samples must be >= 2")
+    if args.limit_half_width is not None and (
+        not np.isfinite(args.limit_half_width) or args.limit_half_width <= 0
+    ):
+        parser.error("limit-half-width must be positive and finite")
     if not (args.warp_repo / "srs_solver.py").is_file():
         parser.error("warp-repo must point to the 7DofSRSKinematicsWarp checkout")
     sys.path[:0] = [str(ROOT / "src"), str(args.warp_repo)]
@@ -39,6 +51,13 @@ def main():
         reference.lower_position_limits,
         reference.upper_position_limits,
     )
+    if args.limit_half_width is not None:
+        center = np.array([0.3, -0.5, 0.7, 1.0, -0.4, 0.8, -0.2])
+        reference.set_position_limits(
+            center - args.limit_half_width, center + args.limit_half_width
+        )
+        joints = center + rng.uniform(-0.8, 0.8, joints.shape) * args.limit_half_width
+        seeds = np.zeros_like(joints)
     targets = np.array([reference.get_fk(q) for q in joints])
     reference_jacobians = np.array([reference.get_jacobian(q) for q in joints])
     reference_chains = np.array([reference.get_all_fk_mat(q) for q in joints])
@@ -46,7 +65,7 @@ def main():
     def scalar_ik():
         results = [
             reference.get_ik(
-                target, seed, num_samples=args.num_samples, search_mode="global"
+                target, seed, num_samples=args.num_samples, search_mode=args.search_mode
             )
             for target, seed in zip(targets, seeds)
         ]
@@ -81,7 +100,7 @@ def main():
                 lambda solver=solver, q=q: solver.get_fk(q),
                 lambda solver=solver, q=q: solver.get_jacobian(q),
                 lambda solver=solver, t=t, seed=seed: solver.get_ik(
-                    t, seed, search_mode="global"
+                    t, seed, search_mode=args.search_mode
                 ),
                 lambda solver=solver, q=q: solver.get_all_fk_mat(q),
             )
@@ -108,7 +127,7 @@ def main():
         return result, float(np.median(elapsed))
 
     print(
-        f"Targets={args.samples}, arm-angle samples={args.num_samples}, repeats={args.repeats}; times are per batch"
+        f"Targets={args.samples}, mode={args.search_mode}, arm-angle samples={args.num_samples}, repeats={args.repeats}; times are per batch"
     )
     for label, fk, jacobian, ik, chain in backends:
         timings, results = [], []
@@ -128,6 +147,10 @@ def main():
         solutions = as_numpy(solutions).reshape(-1, 7)
         if not successes.all():
             raise RuntimeError(f"{label} solved only {successes.sum()}/{args.samples}")
+        if np.any(solutions < reference.lower_position_limits - 1e-6) or np.any(
+            solutions > reference.upper_position_limits + 1e-6
+        ):
+            raise RuntimeError(f"{label} returned joints outside the configured limits")
         actual = np.array([reference.get_fk(q) for q in solutions])
         position = np.linalg.norm(actual[:, :3, 3] - targets[:, :3, 3], axis=1).max()
         rotation = (

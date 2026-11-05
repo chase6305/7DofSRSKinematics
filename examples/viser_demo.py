@@ -2,7 +2,7 @@
 """Open the shared SRS lab, or run the core-only IK benchmark.
 
 Legacy numerical checks accept --validate-only --validation-samples N and
---search-mode continuous/global. Other options are forwarded to the lab.
+--search-mode continuous/global/interval. Other options are forwarded to the lab.
 """
 
 from __future__ import annotations
@@ -85,7 +85,9 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--num-samples", type=int, default=73)
     parser.add_argument(
-        "--search-mode", choices=("continuous", "global"), default="continuous"
+        "--search-mode",
+        choices=("continuous", "global", "interval"),
+        default="continuous",
     )
     parser.add_argument("--validation-samples", type=int, default=24)
     parser.add_argument("--validate-only", action="store_true", required=True)

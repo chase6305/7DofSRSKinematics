@@ -267,7 +267,9 @@ class SRSAnalyticalSolver(Solver, ABC):
         output[~success] = 0
         return success, output
 
-    def _configuration_candidates(self, local, angles, branches, seed):
+    def _configuration_candidates(
+        self, local, angles, branches, seed, limit_tolerance=1e-12
+    ):
         """Decompose mixed branch/angle requests in their original input order."""
         output = np.zeros((len(angles), 7))
         success = np.zeros(len(angles), dtype=bool)
@@ -283,7 +285,9 @@ class SRSAnalyticalSolver(Solver, ABC):
             candidates = self._candidate_joint_angles(
                 geometry, angles[rows], branches[rows], seed
             )
-            candidates, valid = self._map_to_limits(candidates, seed)
+            candidates, valid = self._map_to_limits(
+                candidates, seed, tolerance=limit_tolerance
+            )
             output[rows[valid]] = candidates[valid]
             success[rows] = valid
         return success, output
@@ -609,6 +613,123 @@ class SRSAnalyticalSolver(Solver, ABC):
         joints, valid = self._map_to_limits(joints, joint_seed)
         return (True, joints) if valid else (False, None)
 
+    def _joint_limit_arm_angles(self, prepared):
+        """Boundary events and open-cell midpoints for one elbow geometry.
+
+        Each decomposed joint meets a limit where a*sin(psi)+b*cos(psi)+c
+        vanishes. Both rays of atan2 are retained: extra cuts are harmless and
+        keep the event set independent of the shoulder and wrist branch signs.
+        Singular events are checked separately from their neighboring cells.
+        """
+        shoulder, wrist, _ = prepared
+        lower = self.lower_position_limits + self.dh_params[:, 3]
+        upper = self.upper_position_limits + self.dh_params[:, 3]
+        key = (lower.tobytes(), upper.tobytes())
+        cached = getattr(self, "_ik_boundary_cache", None)
+        entries = [] if cached is None or cached[0] != key else cached[1]
+        for geometry, angles in entries:
+            if geometry is prepared:
+                return angles
+        shoulder, wrist = np.asarray(shoulder), np.asarray(wrist)
+        equations = []
+        for joint, y, x in (
+            (0, shoulder[:, 1, 1], shoulder[:, 0, 1]),
+            (2, -shoulder[:, 2, 2], -shoulder[:, 2, 0]),
+            (4, wrist[:, 1, 2], wrist[:, 0, 2]),
+            (6, wrist[:, 2, 1], -wrist[:, 2, 0]),
+        ):
+            if upper[joint] - lower[joint] < 2 * np.pi:
+                for limit in (lower[joint], upper[joint]):
+                    equations.append(y * np.cos(limit) - x * np.sin(limit))
+        for first, middle, last, rotation, z in (
+            (0, 1, 2, shoulder, shoulder[:, 2, 1]),
+            (4, 5, 6, wrist, wrist[:, 2, 2]),
+        ):
+            values = [-1.0, 1.0]
+            if upper[middle] - lower[middle] < 2 * np.pi:
+                values.extend(np.cos([lower[middle], upper[middle]]))
+            for value in values:
+                equation = z.copy()
+                equation[2] -= value
+                equations.append(equation)
+            # A sphere can stay singular over the whole circle, e.g. at full
+            # extension. Its coupled outer-joint sum then determines feasibility.
+            if np.hypot(*z[:2]) < 1e-13 and abs(abs(z[2]) - 1) < 1e-13:
+                angle = np.arccos(np.clip(z[2], -1.0, 1.0))
+                d, alpha, a, _ = self.dh_params[first]
+                r1 = self._dh_calc(d, alpha, a, 0.0)[:3, :3]
+                d, alpha, a, _ = self.dh_params[middle]
+                r2 = self._dh_calc(d, alpha, a, angle)[:3, :3]
+                residual = (r1 @ r2).T @ rotation
+                sign = 1.0 if z[2] >= 0 else -1.0
+                limits = (
+                    lower[first] + min(sign * lower[last], sign * upper[last]),
+                    upper[first] + max(sign * lower[last], sign * upper[last]),
+                )
+                for limit in limits:
+                    equations.append(
+                        residual[:, 1, 0] * np.cos(sign * limit)
+                        - residual[:, 0, 0] * np.sin(sign * limit)
+                    )
+        roots = self._harmonic_arm_angle_roots(equations)
+        cuts = np.unique(np.r_[-np.pi, roots, np.pi])
+        angles = np.unique(np.r_[cuts, cuts[:-1] + np.diff(cuts) / 2])
+        angles.setflags(write=False)
+        self._ik_boundary_cache = (key, (entries + [(prepared, angles)])[-2:])
+        return angles
+
+    @staticmethod
+    def _harmonic_arm_angle_roots(equations):
+        """Solve harmonic zeros via a stable tan(psi/2) quadratic.
+
+        Computing phase +/- acos instead can lose the small arm-angle root to
+        cancellation, which matters when an outer joint has a fixed limit.
+        """
+        a, b, c = np.asarray(equations).T
+        amplitude = np.hypot(a, b)
+        valid = (amplitude > 0) & (np.abs(c) <= amplitude * (1 + 1e-12))
+        a, b, c, amplitude = (v[valid] for v in (a, b, c, amplitude))
+        discriminant = np.maximum((amplitude - np.abs(c)) * (amplitude + np.abs(c)), 0)
+        q = -a - np.copysign(np.sqrt(discriminant), a)
+        first = np.divide(q, c - b, out=np.full_like(q, np.inf), where=c != b)
+        second = np.divide(b + c, q, out=first.copy(), where=q != 0)
+        return 2 * np.arctan(np.r_[first, second])
+
+    def _joint_limit_candidates(self, local_target, joint_seed):
+        """Evaluate limit-boundary events for all eight discrete branches."""
+        angles, branches = [], []
+        for elbow in (1, -1):
+            if self._is_elbow_up and elbow < 0:
+                continue
+            prepared = self._prepare_ik(local_target, elbow)
+            if prepared is None:
+                continue
+            psi = self._joint_limit_arm_angles(prepared)
+            for branch in range(8):
+                if self._configuration(branch)[1] == elbow:
+                    angles.extend(psi)
+                    branches.extend([branch] * len(psi))
+        return self._configuration_candidates(
+            local_target,
+            np.asarray(angles),
+            np.asarray(branches, dtype=int),
+            joint_seed,
+            # Near singularities, root roundoff can move a decomposed joint
+            # slightly past a boundary. Clamp only this tiny excess; the final
+            # FK check must still meet the caller's configured pose tolerances.
+            limit_tolerance=1e-9,
+        )
+
+    def _joint_limit_anchor(self, target_pose, seed):
+        """Try box anchors when the arm-angle parameterization is degenerate."""
+        lower, upper = self.lower_position_limits, self.upper_position_limits
+        for joints in (0.5 * lower + 0.5 * upper, np.clip(seed, lower, upper)):
+            if self._is_elbow_up and np.sin(joints[3] + self.dh_params[3, 3]) < -1e-12:
+                continue
+            if self._matches_target(joints, target_pose):
+                return joints.copy()
+        return None
+
     def get_ik(
         self,
         target_pose: np.ndarray,
@@ -619,9 +740,12 @@ class SRSAnalyticalSolver(Solver, ABC):
         local_layers: int = 4,
         **kwargs,
     ) -> typing.Tuple[bool, typing.Optional[np.ndarray]]:
-        """Solve one rigid target, preferring the seed branch in continuous mode.
+        """Solve one rigid target with continuous, global or interval search.
 
-        Returns (False, None) when no candidate meets the pose and joint limits."""
+        Interval search checks analytical joint-limit events and cell midpoints.
+        Continuous mode also uses it after local and uniform searches fail.
+        Returns (False, None) when no candidate meets the pose and joint limits.
+        """
         if "num_sample" in kwargs:
             if num_samples is not None:
                 raise TypeError("Use only one of num_samples and num_sample")
@@ -630,8 +754,8 @@ class SRSAnalyticalSolver(Solver, ABC):
             raise TypeError(f"Unexpected IK arguments: {', '.join(sorted(kwargs))}")
         target_pose = self._validate_pose(target_pose)
         joint_seed = self._validate_joints(joint_seed, "joint_seed")
-        if search_mode not in ("continuous", "global"):
-            raise ValueError("search_mode must be 'continuous' or 'global'")
+        if search_mode not in ("continuous", "global", "interval"):
+            raise ValueError("search_mode must be 'continuous', 'global' or 'interval'")
         if not np.isfinite(local_step) or local_step <= 0.0:
             raise ValueError("local_step must be positive and finite")
         if (
@@ -666,6 +790,10 @@ class SRSAnalyticalSolver(Solver, ABC):
         local_target = self._local_target(target_pose)
         geometry = {1: self._prepare_ik(local_target, 1)}
         if geometry[1] is None:
+            if search_mode != "global":
+                anchor = self._joint_limit_anchor(target_pose, joint_seed)
+                if anchor is not None:
+                    return True, anchor
             return False, None
 
         def prepare(rconf):
@@ -730,24 +858,37 @@ class SRSAnalyticalSolver(Solver, ABC):
                         if self._matches_target(candidate, target_pose):
                             return True, candidate.copy()
 
-        # Keep branch-major sample order while sharing the two elbow geometries.
-        nsparams = np.linspace(-np.pi, np.pi, num=int(samples), endpoint=False)
-        branches = np.repeat(np.arange(8), len(nsparams))
-        valid, candidates = self._configuration_candidates(
-            local_target, np.tile(nsparams, 8), branches, joint_seed
-        )
-        joints_array = candidates[valid]
         weights = 1.0 if self.ik_nearst_weight is None else self.ik_nearst_weight
         if self.ik_nearst_weight is not None:
             scale = np.max(weights)
             if scale > 0:
                 weights = weights / scale
-        distances = np.linalg.norm((joints_array - joint_seed) * weights, axis=1)
-        # Stable sorting gives reproducible results even for zero-weight ties.
-        for index in np.argsort(distances, kind="stable"):
-            if self._matches_target(joints_array[index], target_pose):
-                return True, joints_array[index].copy()
-        logger.debug("No valid IK solution found in the sampled configurations.")
+        searches = ("interval",) if search_mode == "interval" else ("global",)
+        if search_mode == "continuous":
+            searches += ("interval",)
+        for search in searches:
+            if search == "interval":
+                valid, candidates = self._joint_limit_candidates(
+                    local_target, joint_seed
+                )
+            else:
+                # Keep the existing branch-major uniform grid and tie order.
+                nsparams = np.linspace(-np.pi, np.pi, num=int(samples), endpoint=False)
+                branches = np.repeat(np.arange(8), len(nsparams))
+                valid, candidates = self._configuration_candidates(
+                    local_target, np.tile(nsparams, 8), branches, joint_seed
+                )
+            joints_array = candidates[valid]
+            distances = np.linalg.norm((joints_array - joint_seed) * weights, axis=1)
+            # Stable sorting gives reproducible results even for zero-weight ties.
+            for index in np.argsort(distances, kind="stable"):
+                if self._matches_target(joints_array[index], target_pose):
+                    return True, joints_array[index].copy()
+        if search_mode != "global":
+            anchor = self._joint_limit_anchor(target_pose, joint_seed)
+            if anchor is not None:
+                return True, anchor
+        logger.debug("No valid IK solution found in the candidate configurations.")
         return False, None
 
     def get_all_fk_mat(

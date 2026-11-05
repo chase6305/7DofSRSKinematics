@@ -25,6 +25,12 @@ Candidates retain their original order for deterministic seed-distance ties;
 returned solutions are checked by FK. Finite arm-angle sampling can miss narrow
 feasible intervals.
 
+`interval` instead derives joint-limit boundary events, checks them and their
+cell midpoints, and ranks feasible candidates by seed distance. Continuous
+search uses it as a final fallback. Two read-only boundary arrays can be reused
+at the same target; geometry or physical-limit changes invalidate them, while
+seeds, weights and final FK checks remain live.
+
 Batched FK and Jacobians traverse all robots together. See [API contracts](api.md)
 for shapes, limits, frames and scalar behavior, and [assets](assets.md) for the
 bundled R800 geometry and mesh provenance.
@@ -37,6 +43,7 @@ materializing all seven joint transforms. Small batches keep the eager path.
 ```bash
 python tools/benchmark_srs.py --frames 180 --repeats 15 --output benchmark.json
 python tools/compare_backends.py --warp-repo ../7DofSRSKinematicsWarp --samples 40
+python tools/compare_backends.py --search-mode interval --limit-half-width 0.0001
 python tools/benchmark_viewer.py --repeats 7 --output viewer-benchmark.json
 ```
 
@@ -51,7 +58,7 @@ and preserve existing output files.
 Recorded local comparisons (Python 3.10, NumPy 2.2.6):
 
 | Workload | Reference | Optimized |
-|:--|--:|--:|
+| :-- | --: | --: |
 | 4096 Jacobians | Scalar loop: 118.003 ms | Batched: 2.602 ms |
 | First eight-branch gallery opening | `8174d96`: 545 ms | 254 ms |
 | 4096 batched FK, CPU | `7e18cdc`: 1.727 ms / 5.28 MB | 1.272 ms / 2.03 MB |
@@ -68,5 +75,9 @@ Hardware and load affect all timings.
 
 ## References
 
-- Shimizu et al., “Analytical Inverse Kinematic Computation for 7-DOF Redundant Manipulators With Joint Limits and Its Application to Redundancy Resolution,” IEEE T-RO, 2008, [DOI](https://doi.org/10.1109/TRO.2008.2003266).
-- Faria et al., “Position-based kinematics for 7-DoF serial manipulators with global configuration control, joint limit and singularity avoidance,” MMT, 2018, [DOI](https://doi.org/10.1016/j.mechmachtheory.2017.10.025).
+- Shimizu et al., “Analytical Inverse Kinematic Computation for 7-DOF Redundant Manipulators With
+  Joint Limits and Its Application to Redundancy Resolution,” IEEE T-RO, 2008,
+  [DOI](https://doi.org/10.1109/TRO.2008.2003266).
+- Faria et al., “Position-based kinematics for 7-DoF serial manipulators with global configuration
+  control, joint limit and singularity avoidance,” MMT, 2018,
+  [DOI](https://doi.org/10.1016/j.mechmachtheory.2017.10.025).
