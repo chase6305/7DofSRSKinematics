@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 from copy import deepcopy
 from functools import partial
-import inspect
 import json
 import time
 from pathlib import Path
@@ -115,15 +114,8 @@ class LabApp:
             raise
 
     def _line(self, name, points, color, width=3.0):
-        # Viser 1.1 renamed line_width; support the viewer extra's 1.0 API too.
-        parameters = inspect.signature(self.server.scene.add_line_segments).parameters
-        width_args = (
-            {"thickness": width, "thickness_units": "screen"}
-            if "thickness" in parameters
-            else {"line_width": width}
-        )
         return self.server.scene.add_line_segments(
-            name, np.asarray(points, dtype=np.float32), colors=color, **width_args
+            name, np.asarray(points, dtype=np.float32), colors=color, line_width=width
         )
 
     def _build_scene(self):

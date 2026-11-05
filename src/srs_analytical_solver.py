@@ -439,17 +439,6 @@ class SRSAnalyticalSolver(Solver, ABC):
         rotation = transforms[0, :3, :3] @ transforms[1, :3, :3] @ transforms[2, :3, :3]
         return rotation, joints
 
-    def _reference_plane(self, pose: np.ndarray, elbow_GC4: int) -> tuple:
-        """Return the reference plane normal, shoulder rotation and joint angles."""
-        rotation, joints = self._reference_geometry(pose, elbow_GC4)
-        if rotation is None:
-            return False, None, None, None
-        transforms = self._joint_transforms(joints - self.dh_params[:, 3], stop=3)
-        elbow = (transforms[0] @ transforms[1] @ transforms[2])[:3, 3]
-        shoulder = np.array([0.0, 0.0, self.link_lengths[0]])
-        wrist = pose[:3, 3] - pose[:3, 2] * self.dh_params[-1, 0]
-        return True, np.cross(elbow - shoulder, wrist - shoulder), rotation, joints
-
     def _local_target(self, target_pose):
         return np.linalg.solve(self.world_to_base, target_pose) @ np.linalg.inv(
             self.flange_to_ee

@@ -25,27 +25,12 @@ class ISolver(metaclass=ABCMeta):
 
     @abstractmethod
     def get_fk(self, qpos: np.ndarray, index: int = -1) -> np.ndarray:
-        r"""Get the forward kinematics for a given joint state.
-
-        Args:
-            qpos (np.ndarray): A 1D array of shape [dof,] representing the joint state.
-            index (int, optional): The index of the link for which to retrieve the pose.
-                                Defaults to -1, which typically corresponds to the end-effector.
-
-        Returns:
-            np.ndarray: A 4x4 transformation matrix representing the pose of the specified link.
-        """
+        """Return a world-frame TCP or DH link pose; subclasses define batch shapes."""
 
 
 class Solver(ISolver):
     def __init__(self, urdf_path: str, end_link_name: str, **kwargs):
-        r"""Initializes the kinematics solver with a robot model.
-
-        Args:
-            urdf_path (str): The file path to the robot's URDF file.
-            end_link_name (str): The name of the end-effector link.
-            **kwargs: Additional keyword arguments for customization.
-        """
+        """Initialize joint metadata, limits and IK search defaults."""
         self.urdf_path = urdf_path
 
         self.end_link_name = end_link_name
@@ -86,20 +71,7 @@ class Solver(ISolver):
         num_samples: int = 30,
         is_only_position_constraint: bool = False,
     ) -> bool:
-        r"""Sets the iteration parameters for the kinematics solver.
-
-        Args:
-            pos_eps (float): Pos convergence threshold, must be positive.
-            rot_eps (float): Rot convergence threshold, must be positive.
-            max_iterations (int): Maximum number of iterations, must be positive.
-            dt (float): Time step size, must be positive.
-            damp (float): Damping factor, must be non-negative.
-            num_samples (int): Number of samples, must be an integer >= 2.
-            is_only_position_constraint (bool): Flag to indicate whether the solver should only consider position constraints.
-
-        Returns:
-            bool: True if all parameters are valid and set, False otherwise.
-        """
+        """Validate and store search tolerances, sampling and iteration settings."""
         positive = (pos_eps, rot_eps, dt)
         try:
             valid = all(
@@ -132,18 +104,7 @@ class Solver(ISolver):
         return True
 
     def get_iteration_params(self) -> dict:
-        r"""Returns the current iteration parameters.
-
-        Returns:
-            dict: A dictionary containing the current values of:
-                - pos_eps (float): Pos convergence threshold
-                - rot_eps (float): Rot convergence threshold
-                - max_iterations (int): Maximum number of iterations.
-                - dt (float): Time step size.
-                - damp (float): Damping factor.
-                - num_samples (int): Number of samples.
-                - is_only_position_constraint (bool): Flag to indicate whether the solver should only consider position constraints.
-        """
+        """Return the current IK settings."""
         return {
             "pos_eps": self._pos_eps,
             "rot_eps": self._rot_eps,
@@ -157,16 +118,7 @@ class Solver(ISolver):
     def set_ik_nearst_weight(
         self, ik_weight: np.ndarray, joint_ids: typing.Optional[np.ndarray] = None
     ) -> bool:
-        r"""Sets the inverse kinematics nearest weight.
-
-        Args:
-            ik_weight (np.ndarray): A numpy array representing the nearest weights for inverse kinematics.
-            joint_ids (np.ndarray, optional): A numpy array representing the indices of the joints to which the weights apply.
-                                            If None, defaults to all joint indices.
-
-        Returns:
-            bool: True if the weights are set successfully, False otherwise.
-        """
+        """Set finite, non-negative weights for all joints or selected unique indices."""
         try:
             ik_weight = np.asarray(ik_weight, dtype=float)
             joint_ids = np.asarray(
@@ -199,11 +151,7 @@ class Solver(ISolver):
         return True
 
     def get_ik_nearst_weight(self):
-        r"""Gets the inverse kinematics nearest weight.
-
-        Returns:
-            np.ndarray: A copy of the nearest weights, or None if unset.
-        """
+        """Return an independent weight array, or None when unset."""
         return None if self.ik_nearst_weight is None else self.ik_nearst_weight.copy()
 
     def set_position_limits(
@@ -211,15 +159,7 @@ class Solver(ISolver):
         lower_position_limits: typing.List[float],
         upper_position_limits: typing.List[float],
     ) -> bool:
-        r"""Sets the upper and lower joint position limits.
-
-        Parameters:
-            lower_position_limits (List[float]): A list of lower limits for each joint.
-            upper_position_limits (List[float]): A list of upper limits for each joint.
-
-        Returns:
-            bool: True if limits are successfully set, False if the input is invalid.
-        """
+        """Set finite lower/upper joint vectors; return False for invalid bounds."""
         try:
             lower = np.asarray(lower_position_limits, dtype=float)
             upper = np.asarray(upper_position_limits, dtype=float)
@@ -252,30 +192,15 @@ class Solver(ISolver):
         }
 
     def set_elbow_up(self, enable: bool = False):
-        r"""Set the elbow position state.
-
-        Args:
-            enable (bool): Whether to enable the elbow-up position.
-        """
+        """Restrict IK to the positive elbow branch when enabled."""
         self._is_elbow_up = enable
 
     def set_tcp(self, xpos: np.ndarray):
-        r"""Sets the TCP position with the given 4x4 homogeneous matrix.
-
-        Args:
-            xpos (np.ndarray): The 4x4 homogeneous matrix to be set as the TCP position.
-
-        Raises:
-            ValueError: If the input is not a finite rigid 4x4 transform.
-        """
+        """Set the finite, rigid flange-to-TCP transform."""
         self.tcp_xpos = self._validate_pose(xpos, "xpos").copy()
 
     def get_tcp(self) -> np.ndarray:
-        r"""Returns the current TCP position.
-
-        Returns:
-            np.ndarray: The current TCP position.
-        """
+        """Return an independent flange-to-TCP transform."""
         return self.tcp_xpos.copy()
 
     def qpos_to_limits(
@@ -284,17 +209,7 @@ class Solver(ISolver):
         joint_seed: np.ndarray,
         active_qmask: typing.Optional[np.ndarray] = None,
     ):
-        """Adjusts the joint positions (q) to be within specified limits and as close as possible to the joint seed,
-        while minimizing the total weighted difference.
-
-        Args:
-            q (np.ndarray): The original joint positions.
-            joint_seed (np.ndarray): The desired (seed) joint positions.
-            active_qmask (np.ndarray): A mask indicating which joints are active.
-
-        Returns:
-            np.ndarray: The adjusted joints, or [] if no periodic representation fits.
-        """
+        """Return the periodic representation nearest the seed, or [] when infeasible."""
         q = self._validate_joints(q, "q")
         joint_seed = self._validate_joints(joint_seed, "joint_seed")
         if active_qmask is not None:
@@ -351,18 +266,7 @@ class Solver(ISolver):
         return pose
 
     def limit_robot_config(self, qpos_list: np.ndarray) -> np.ndarray:
-        r"""Limit the robot configuration based on the elbow position.
-
-        If the elbow is in the up position, it checks the positions of specific
-        links to determine if the configuration is valid.
-
-        Args:
-            qpos_list (np.ndarray): The list of joint positions to be limited.
-
-        Returns:
-            np.ndarray: The limited list of joint positions if the elbow is up,
-                        otherwise returns the original list.
-        """
+        """Filter joint rows to q4 >= 0 when the positive elbow branch is requested."""
         qpos = np.asarray(qpos_list, dtype=float)
         if not self._is_elbow_up:
             return qpos
