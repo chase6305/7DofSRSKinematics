@@ -48,7 +48,9 @@ python tools/benchmark_viewer.py --repeats 7 --output viewer-benchmark.json
 ```
 
 The first command measures fixed/moving TCP queries, an eight-branch gallery
-and a 584-point manifold. The second requires Warp dependencies and compares
+and a 584-point manifold. It also compares interval queries with boundary
+reuse enabled and disabled, keeping the underlying geometry cache in both.
+The second requires Warp dependencies and compares
 identical targets and limits; add `--device cuda` for CUDA. Exact branch/arm-angle
 IK uses CPU geometry in both repositories, so these exact-query timings do not
 measure GPU global IK throughput. The viewer benchmark requires the visualization
@@ -72,6 +74,11 @@ Jacobian timing includes stacking the scalar results. Gallery timing includes
 IK and server scene construction, excluding initial app construction, network,
 browser and WebGL; it uses Viser 1.0.24, yourdfpy 0.0.60 and trimesh 4.12.2.
 Hardware and load affect all timings.
+
+For 120 repeated interval queries and 15 trials on one CPU thread, boundary
+reuse reduced median per-query latency from 0.543 to 0.276 ms. Cached and
+uncached outputs were identical. [Interval-query data](benchmarks/interval-query.json)
+records all trials, residuals and the command; these are complete backend calls.
 
 ## References
 
