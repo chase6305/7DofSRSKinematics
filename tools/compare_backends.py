@@ -152,6 +152,11 @@ def main():
     print(
         f"NumPy reference vectorized chain: {median_ms:.3f} ms; all link poses verified"
     )
+    jacobians, median_ms = measure(lambda: reference.get_jacobian(joints))
+    np.testing.assert_allclose(jacobians, reference_jacobians, atol=1e-12, rtol=0)
+    print(
+        f"NumPy reference vectorized Jacobian: {median_ms:.3f} ms; all Jacobians verified"
+    )
 
 
 if __name__ == "__main__":

@@ -231,12 +231,12 @@ def test_unreachable_and_collapsed_arm_fail_without_numerical_warnings():
         assert_pose(solver.get_fk(q), straight)
 
 
-def test_global_search_selects_weighted_best_sample_and_is_deterministic():
+@pytest.mark.parametrize("samples", [2, 17, 73])
+def test_global_search_selects_weighted_best_sample_and_is_deterministic(samples):
     solver = KUKAiiwaSolver()
     solver.set_position_limits([-2 * np.pi] * 7, [2 * np.pi] * 7)
     seed = JOINTS + 0.2
     target = solver.get_fk(JOINTS)
-    samples = 12
     candidates = []
     for signs in product((-1, 1), repeat=3):
         for psi in np.linspace(-np.pi, np.pi, samples, endpoint=False):
@@ -257,11 +257,13 @@ def test_global_search_selects_weighted_best_sample_and_is_deterministic():
             expected_distance, abs=1e-12
         )
         for _ in range(2):
-            np.testing.assert_array_equal(
+            np.testing.assert_allclose(
                 solver.get_ik(target, seed, num_samples=samples, search_mode="global")[
                     1
                 ],
                 q,
+                atol=1e-13,
+                rtol=0,
             )
 
 
@@ -388,3 +390,41 @@ def test_singular_joint_limits_with_shifted_revolutions():
     ok, solution = solver.solve_configuration(target, solver.get_configuration(q), seed)
     assert ok
     np.testing.assert_allclose(solution, q, atol=1e-12)
+
+
+@pytest.mark.parametrize("scale", [1e-200, 1e200])
+def test_global_weight_ranking_is_invariant_to_finite_common_scale(scale):
+    solver = KUKAiiwaSolver()
+    q = np.array([0.3, -0.5, 0.7, 1.0, -0.4, 0.8, -0.2])
+    target, seed = solver.get_fk(q), q + 0.2
+    weights = np.array([1.0, 2.0, 0.0, 3.0, 1.0, 0.0, 4.0])
+    solver.set_ik_nearst_weight(weights)
+    ok, expected = solver.get_ik(target, seed, num_samples=73, search_mode="global")
+    assert ok
+    solver.set_ik_nearst_weight(weights * scale)
+    with np.errstate(over="raise", invalid="raise"):
+        ok, actual = solver.get_ik(target, seed, num_samples=73, search_mode="global")
+    assert ok
+    np.testing.assert_allclose(actual, expected, atol=1e-12, rtol=0)
+    np.testing.assert_array_equal(solver.get_ik_nearst_weight(), weights * scale)
+
+
+@pytest.mark.parametrize("search_mode", ["continuous", "global"])
+def test_quantized_workspace_boundary_still_obeys_position_tolerance(search_mode):
+    solver = KUKAiiwaSolver()
+    q = np.zeros(7)
+    target = solver.get_fk(q).astype(np.float32)
+    ok, solution = solver.get_ik(
+        target, q + 0.02, num_samples=73, search_mode=search_mode
+    )
+    assert ok
+    actual = solver.get_fk(solution)
+    assert np.linalg.norm(actual[:3, 3] - target[:3, 3]) < 1e-7
+    np.testing.assert_allclose(actual[:3, :3], target[:3, :3], atol=1e-7, rtol=0)
+    # Rounding puts this target slightly beyond full extension. A stricter
+    # requested residual must still reject its projected boundary solution.
+    assert solver.set_iteration_params(pos_eps=1e-9)
+    ok, solution = solver.get_ik(
+        target, q + 0.02, num_samples=73, search_mode=search_mode
+    )
+    assert not ok and solution is None

@@ -20,6 +20,10 @@ MODES = {
     "manifold": "Self-motion manifold",
 }
 
+DEFAULT_AMPLITUDE_DEG = 60.0
+DEFAULT_FREQUENCY_HZ = 0.1
+DEFAULT_PATH_SIZE_M = 0.05
+
 
 def pose_error(actual, target):
     position = float(np.linalg.norm(actual[:3, 3] - target[:3, 3]))
@@ -58,8 +62,8 @@ class Experiment:
         self.backend = backend
         self.mode = mode
         self.play = False
-        self.amplitude = 35.0
-        self.frequency = 0.2
+        self.amplitude = DEFAULT_AMPLITUDE_DEG
+        self.frequency = DEFAULT_FREQUENCY_HZ
         self.phase = 0.0
         self.play_center = 0.0
         self.generation = 0
@@ -72,7 +76,7 @@ class Experiment:
         self._velocities = None
         self.path_kind = "figure-eight"
         self.path_plane = "world-xy"
-        self.path_radius = 0.035
+        self.path_radius = DEFAULT_PATH_SIZE_M
         self.max_joint_speed = 1.0
         self._manifold_key = None
         self._manifold = None

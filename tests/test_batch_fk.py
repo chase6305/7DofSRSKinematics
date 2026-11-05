@@ -6,7 +6,7 @@ import pytest
 from kuka_iiwa_solver import KUKAiiwaSolver
 
 
-@pytest.mark.parametrize("count", [0, 1, 8, 64])
+@pytest.mark.parametrize("count", [0, 1, 8, 64, 256, 257])
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 def test_batch_chain_against_independent_dh_with_world_tool_and_offsets(count, dtype):
     solver = KUKAiiwaSolver()
@@ -17,6 +17,8 @@ def test_batch_chain_against_independent_dh_with_world_tool_and_offsets(count, d
     )
     solver.set_tcp(tcp)
     solver.dh_params[:, 3] = np.linspace(-0.1, 0.1, 7)
+    solver.dh_params[:, 1] += np.linspace(-0.07, 0.07, 7)
+    solver.dh_params[:, 2] = np.linspace(0.01, 0.03, 7)
     joints = (
         np.random.default_rng(813).uniform(-1.5, 1.5, (count * 2, 7)).astype(dtype)[::2]
     )

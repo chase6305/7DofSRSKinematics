@@ -1,0 +1,39 @@
+{
+  "before": [
+    651.6146219801158,
+    549.0099099697545,
+    612.5739540439099,
+    533.2969289738685,
+    529.5091840671375,
+    544.5476470049471,
+    541.2994839716703
+  ],
+  "after": [
+    370.9185519255698,
+    250.53967302665114,
+    239.76292402949184,
+    282.2928059613332,
+    249.11205901298672,
+    314.9537389399484,
+    253.94259206950665
+  ],
+  "medians_ms": {
+    "before": 544.5476470049471,
+    "after": 253.94259206950665
+  },
+  "encoded_unique_meshes": 11,
+  "encoded_cache_bytes": 4635816,
+  "date_utc": "2026-11-04",
+  "before_commit": "8174d96deb07aedc306265d7ee0e19c6adac72db",
+  "after_app_blob": "63128ef5dac60393a3a43b75825ec6cff6c9eb63",
+  "environment": {
+    "python": "3.10.0",
+    "numpy": "2.2.6",
+    "viser": "1.0.24",
+    "yourdfpy": "0.0.60",
+    "trimesh": "4.12.2"
+  },
+  "warmup_trials": 1,
+  "recorded_trials": 7,
+  "scope": "Viewer component from the before commit versus current viewer, using the same current NumPy backend. First branch-mode app.step includes IK and server scene creation, excluding initial app construction, browser, network and WebGL. Shared host, interleaved trials."
+}

@@ -1,0 +1,61 @@
+{
+  "backend": "NumPy",
+  "viser": "1.0.24",
+  "source": "Running Viser app; browser screenshots at fixed simulation steps",
+  "viewport": [
+    1440,
+    900
+  ],
+  "gif_size": [
+    1080,
+    675
+  ],
+  "browser_exceptions": 0,
+  "recordings": [
+    {
+      "mode": "arm-angle",
+      "file": "self-motion.gif",
+      "frames": 150,
+      "fps": 15,
+      "simulation_fps": 30,
+      "simulated_seconds": 10,
+      "frequency_hz": 0.1,
+      "joint_speed_bound_rad_s": 2,
+      "peak_joint_speed_rad_s": 1.8325131670967647,
+      "max_position_error_m": 3.188872858294072e-16,
+      "max_rotation_error_rad": 7.311895462613621e-16,
+      "min_joint_limit_margin_rad": 0.7535432399027049,
+      "loop_closure_max_joint_delta_rad": 9.980904991380157e-14,
+      "amplitude_deg": 90,
+      "observed_offset_deg": [
+        -89.98026151273613,
+        89.98026151273609
+      ]
+    },
+    {
+      "mode": "trajectory",
+      "file": "trajectory.gif",
+      "frames": 150,
+      "fps": 15,
+      "simulation_fps": 30,
+      "simulated_seconds": 10,
+      "frequency_hz": 0.1,
+      "joint_speed_bound_rad_s": 1,
+      "peak_joint_speed_rad_s": 0.3632606010631789,
+      "max_position_error_m": 6.206335383118183e-16,
+      "max_rotation_error_rad": 6.649763268202179e-16,
+      "min_joint_limit_margin_rad": 0.791362771922266,
+      "loop_closure_max_joint_delta_rad": 2.1871393585115584e-14,
+      "path": "figure-eight",
+      "plane": "world-xy",
+      "path_size_m": 0.09,
+      "accepted_steps": 300
+    }
+  ],
+  "dependencies": {
+    "numpy": "2.2.6",
+    "viser": "1.0.24",
+    "yourdfpy": "0.0.60",
+    "trimesh": "4.12.2"
+  }
+}

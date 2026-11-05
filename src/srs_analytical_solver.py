@@ -56,31 +56,16 @@ class SRSAnalyticalSolver(Solver, ABC):
         self.dof = 7
 
     def get_dof(self) -> int:
-        r"""Returns the degree of freedom (DOF) of the robot.
-
-        Returns:
-            int: The degree of freedom of the robot.
-        """
+        """Return the number of joints."""
         return self.dof
 
     def get_urdf_path(self) -> str:
-        r"""Returns the file path to the URDF (Unified Robot Description Format) file.
-
-        Returns:
-            str: The file path to the URDF file.
-        """
+        """Return the robot URDF path."""
         return self.urdf_path
 
     @staticmethod
     def skew(vector: np.ndarray) -> np.ndarray:
-        r"""Compute the skew-symmetric matrix of a vector.
-
-        Args:
-            vector (np.ndarray): A 3D vector.
-
-        Returns:
-            np.ndarray: The skew-symmetric matrix of the input vector.
-        """
+        """Return the cross-product matrix of a three-vector."""
         return np.array(
             [
                 [0, -vector[2], vector[1]],
@@ -91,9 +76,20 @@ class SRSAnalyticalSolver(Solver, ABC):
 
     def _dh_calc(self, d, alpha, a, theta) -> np.ndarray:
         """Build standard DH transforms, broadcasting over joint arrays."""
-        d, alpha, a, theta = np.broadcast_arrays(d, alpha, a, theta)
-        ct, st, ca, sa = np.cos(theta), np.sin(theta), np.cos(alpha), np.sin(alpha)
-        transforms = np.zeros(theta.shape + (4, 4))
+        shape = np.broadcast(d, alpha, a, theta).shape
+        return self._fill_dh(
+            np.zeros(shape + (4, 4)),
+            d,
+            a,
+            np.cos(theta),
+            np.sin(theta),
+            np.cos(alpha),
+            np.sin(alpha),
+        )
+
+    @staticmethod
+    def _fill_dh(transforms, d, a, ct, st, ca, sa):
+        """Fill DH entries in zeroed output storage."""
         transforms[..., 0, 0] = ct
         transforms[..., 0, 1] = -st * ca
         transforms[..., 0, 2] = st * sa
@@ -107,6 +103,31 @@ class SRSAnalyticalSolver(Solver, ABC):
         transforms[..., 2, 3] = d
         transforms[..., 3, 3] = 1.0
         return transforms
+
+    def _iter_joint_transforms(self, qpos, stop=7):
+        """Yield joint transforms; large batches reuse one matrix buffer."""
+        if qpos.ndim != 2 or len(qpos) < 256:
+            transforms = self._joint_transforms(qpos, stop)
+            if qpos.ndim > 1:
+                transforms = np.moveaxis(transforms, -3, 0)
+            yield from transforms
+            return
+        d, alpha, a, theta = self.dh_params[:stop].T
+        ct = qpos[:, :stop] + theta
+        st = np.sin(ct)
+        np.cos(ct, out=ct)
+        ca, sa = np.cos(alpha), np.sin(alpha)
+        transform = np.zeros((len(qpos), 4, 4))
+        for index in range(stop):
+            yield self._fill_dh(
+                transform,
+                d[index],
+                a[index],
+                ct[:, index],
+                st[:, index],
+                ca[index],
+                sa[index],
+            )
 
     def _joint_transforms(self, qpos, stop=7):
         d, alpha, a, theta = self.dh_params[:stop].T
@@ -129,14 +150,7 @@ class SRSAnalyticalSolver(Solver, ABC):
         return self.flange_to_ee.copy()
 
     def _configuration(self, rconf: int) -> tuple:
-        r"""Determine the configuration of the arm, elbow, and wrist based on a configuration integer.
-
-        Args:
-            rconf (int): The configuration integer.
-
-        Returns:
-            tuple: A tuple containing the configurations of the arm, elbow, and wrist.
-        """
+        """Decode shoulder, elbow and wrist signs from the three branch bits."""
         arm_config = -1 if rconf & 1 else 1
         elbow_config = -1 if rconf & 2 else 1
         wrist_config = -1 if rconf & 4 else 1
@@ -236,10 +250,8 @@ class SRSAnalyticalSolver(Solver, ABC):
         configurations = tuple(configurations)
         if any(not isinstance(c, SRSConfiguration) for c in configurations):
             raise TypeError("configurations must contain SRSConfiguration values")
-        output = np.zeros((len(configurations), 7))
-        success = np.zeros(len(configurations), dtype=bool)
         if not configurations:
-            return success, output
+            return np.zeros(0, dtype=bool), np.zeros((0, 7))
         branches = np.array(
             [
                 self._configuration_index(c.shoulder, c.elbow, c.wrist)
@@ -248,37 +260,64 @@ class SRSAnalyticalSolver(Solver, ABC):
         )
         angles = np.array([c.redundancy for c in configurations])
         local = self._local_target(target)
-        geometry = {}
-        for branch in np.unique(branches):
-            elbow = self._configuration(branch)[1]
-            if self._is_elbow_up and elbow < 0:
-                continue
-            if elbow not in geometry:
-                geometry[elbow] = self._prepare_ik(local, elbow)
-            if geometry[elbow] is None:
-                continue
-            rows = np.flatnonzero(branches == branch)
-            candidates = self._candidate_joint_angles(
-                geometry[elbow], angles[rows], branch, seed
-            )
-            candidates, valid = self._map_to_limits(candidates, seed)
-            output[rows[valid]] = candidates[valid]
-            success[rows] = valid
+        success, output = self._configuration_candidates(local, angles, branches, seed)
         rows = np.flatnonzero(success)
         if len(rows):
             success[rows] = self._poses_match(self.get_fk(output[rows]), target)
         output[~success] = 0
         return success, output
 
-    def get_jacobian(self, qpos: np.ndarray, step: float = 1e-7) -> np.ndarray:
-        """Return the analytical 6x7 geometric Jacobian in the world frame.
+    def _configuration_candidates(self, local, angles, branches, seed):
+        """Decompose mixed branch/angle requests in their original input order."""
+        output = np.zeros((len(angles), 7))
+        success = np.zeros(len(angles), dtype=bool)
+        for elbow in (1, -1):
+            if self._is_elbow_up and elbow < 0:
+                continue
+            rows = np.flatnonzero((branches & 2) == (0 if elbow > 0 else 2))
+            if not len(rows):
+                continue
+            geometry = self._prepare_ik(local, elbow)
+            if geometry is None:
+                continue
+            candidates = self._candidate_joint_angles(
+                geometry, angles[rows], branches[rows], seed
+            )
+            candidates, valid = self._map_to_limits(candidates, seed)
+            output[rows[valid]] = candidates[valid]
+            success[rows] = valid
+        return success, output
 
-        Rows are linear then angular velocity at the TCP. ``step`` is retained
-        for API compatibility and validated, but no finite differences are used.
+    def get_jacobian(self, qpos: np.ndarray, step: float = 1e-7) -> np.ndarray:
+        """Return analytical world-frame geometric Jacobians, linear rows first.
+
+        Input (7,) returns (6, 7); input (N, 7) returns (N, 6, 7), including
+        empty/strided batches. ``step`` is retained for API compatibility and
+        validated, but no finite differences are used.
         """
-        qpos = self._validate_joints(qpos)
+        qpos = np.asarray(qpos, dtype=float)
+        if (
+            qpos.ndim not in (1, 2)
+            or qpos.shape[-1] != 7
+            or not np.all(np.isfinite(qpos))
+        ):
+            raise ValueError("qpos must be finite and have shape (7,) or (N, 7)")
         if not np.isfinite(step) or step <= 0.0:
             raise ValueError("step must be positive and finite")
+        if qpos.ndim == 2:
+            count = len(qpos)
+            pose = np.broadcast_to(self.world_to_base, (count, 4, 4))
+            origins, axes = np.empty((count, 7, 3)), np.empty((count, 7, 3))
+            for index, transform in enumerate(self._iter_joint_transforms(qpos)):
+                origins[:, index] = pose[:, :3, 3]
+                axes[:, index] = pose[:, :3, 2]
+                pose = pose @ transform
+            tcp = (pose @ self.flange_to_ee)[:, :3, 3]
+            linear = np.cross(axes, tcp[:, None] - origins)
+            output = np.empty((count, 6, 7))
+            output[:, :3] = linear.transpose(0, 2, 1)
+            output[:, 3:] = axes.transpose(0, 2, 1)
+            return output
         poses = self._fk_chain(qpos)
         tcp = (poses[-1] @ self.flange_to_ee)[:3, 3]
         parents = np.stack([self.world_to_base] + poses[:-1])
@@ -359,15 +398,7 @@ class SRSAnalyticalSolver(Solver, ABC):
     def _calculate_joint_angles(
         self, P_s_to_w: np.ndarray, elbow_GC4: int
     ) -> typing.Tuple[bool, typing.Optional[np.ndarray]]:
-        r"""Calculate joint angles based on the position from shoulder to wrist and elbow configuration.
-
-        Args:
-            P_s_to_w (np.ndarray): The position vector from shoulder to wrist.
-            elbow_GC4 (int): The elbow configuration parameter.
-
-        Returns:
-            np.ndarray: A boolean indicating success and an array of joint angles.
-        """
+        """Build reference shoulder/elbow angles for a reachable wrist centre."""
         d_se, d_ew = self.link_lengths[1:3]
         joints = np.zeros(7)
 
@@ -375,13 +406,15 @@ class SRSAnalyticalSolver(Solver, ABC):
         norm_P26 = np.linalg.norm(P_s_to_w)
         if norm_P26 < 1e-12:
             return False, None
-        if not (
-            d_se + d_ew + 1e-10 >= norm_P26 and norm_P26 + 1e-10 >= abs(d_se - d_ew)
-        ):
+        # Float32 pose rounding can put full extension just outside the triangle.
+        # Returned solutions still have to pass the FK residual checks.
+        if not (d_se + d_ew + 1e-6 >= norm_P26 and norm_P26 + 1e-6 >= abs(d_se - d_ew)):
             logger.debug("Specified pose outside reachable workspace.")
             return False, None
 
         elbow_cos_angle = (norm_P26**2 - d_se**2 - d_ew**2) / (2 * d_se * d_ew)
+        if abs(elbow_cos_angle) > 1.0 + 1e-6:
+            return False, None
 
         joints[3] = elbow_GC4 * np.arccos(np.clip(elbow_cos_angle, -1.0, 1.0))
 
@@ -412,17 +445,6 @@ class SRSAnalyticalSolver(Solver, ABC):
         transforms = self._joint_transforms(joints - self.dh_params[:, 3], stop=3)
         rotation = transforms[0, :3, :3] @ transforms[1, :3, :3] @ transforms[2, :3, :3]
         return rotation, joints
-
-    def _reference_plane(self, pose: np.ndarray, elbow_GC4: int) -> tuple:
-        """Return the reference plane normal, shoulder rotation and joint angles."""
-        rotation, joints = self._reference_geometry(pose, elbow_GC4)
-        if rotation is None:
-            return False, None, None, None
-        transforms = self._joint_transforms(joints - self.dh_params[:, 3], stop=3)
-        elbow = (transforms[0] @ transforms[1] @ transforms[2])[:3, 3]
-        shoulder = np.array([0.0, 0.0, self.link_lengths[0]])
-        wrist = pose[:3, 3] - pose[:3, 2] * self.dh_params[-1, 0]
-        return True, np.cross(elbow - shoulder, wrist - shoulder), rotation, joints
 
     def _local_target(self, target_pose):
         return np.linalg.solve(self.world_to_base, target_pose) @ np.linalg.inv(
@@ -474,9 +496,14 @@ class SRSAnalyticalSolver(Solver, ABC):
         return shoulder, wrist, joints[3]
 
     def _candidate_joint_angles(self, prepared, nsparams, rconf, joint_seed):
-        """Decompose one branch for a scalar or a vector of arm angles."""
+        """Decompose scalar requests or mixed branches sharing elbow geometry."""
         shoulder, wrist, elbow_angle = prepared
-        arm_config, _, wrist_config = self._configuration(rconf)
+        if isinstance(rconf, (int, np.integer)):
+            arm_config, _, wrist_config = self._configuration(rconf)
+        else:
+            rconf = np.asarray(rconf)
+            arm_config = np.where(rconf & 1, -1, 1)
+            wrist_config = np.where(rconf & 4, -1, 1)
         psi = np.asarray(nsparams)
         sine, cosine = np.sin(psi)[..., None, None], np.cos(psi)[..., None, None]
         r03 = shoulder[0] * sine + shoulder[1] * cosine + shoulder[2]
@@ -592,15 +619,9 @@ class SRSAnalyticalSolver(Solver, ABC):
         local_layers: int = 4,
         **kwargs,
     ) -> typing.Tuple[bool, typing.Optional[np.ndarray]]:
-        """Solve a pose with deterministic arm-angle sampling.
+        """Solve one rigid target, preferring the seed branch in continuous mode.
 
-        ``continuous`` returns the first valid nearby solution, preferring the
-        seed branch. ``global`` ranks all sampled branches by weighted Euclidean
-        joint distance; this is a sampled optimum, not a continuous one.
-        ``num_samples`` overrides the configured default for this call only.
-        Invalid inputs raise ValueError; an unavailable solution returns
-        ``(False, None)``. Both modes enforce joint limits and elbow preference.
-        """
+        Returns (False, None) when no candidate meets the pose and joint limits."""
         if "num_sample" in kwargs:
             if num_samples is not None:
                 raise TypeError("Use only one of num_samples and num_sample")
@@ -709,20 +730,18 @@ class SRSAnalyticalSolver(Solver, ABC):
                         if self._matches_target(candidate, target_pose):
                             return True, candidate.copy()
 
-        # Batch every arm angle for each branch; shared geometry and NumPy
-        # arrays avoid hundreds of tiny thread-pool jobs and repeated FK calls.
-        joints_list = []
+        # Keep branch-major sample order while sharing the two elbow geometries.
         nsparams = np.linspace(-np.pi, np.pi, num=int(samples), endpoint=False)
-        for rconf in range(8):
-            if self._is_elbow_up and rconf & 2:
-                continue
-            candidates = self._candidate_joint_angles(
-                prepare(rconf), nsparams, rconf, joint_seed
-            )
-            candidates, valid = self._map_to_limits(candidates, joint_seed)
-            joints_list.append(candidates[valid])
-        joints_array = np.concatenate(joints_list)
+        branches = np.repeat(np.arange(8), len(nsparams))
+        valid, candidates = self._configuration_candidates(
+            local_target, np.tile(nsparams, 8), branches, joint_seed
+        )
+        joints_array = candidates[valid]
         weights = 1.0 if self.ik_nearst_weight is None else self.ik_nearst_weight
+        if self.ik_nearst_weight is not None:
+            scale = np.max(weights)
+            if scale > 0:
+                weights = weights / scale
         distances = np.linalg.norm((joints_array - joint_seed) * weights, axis=1)
         # Stable sorting gives reproducible results even for zero-weight ties.
         for index in np.argsort(distances, kind="stable"):
@@ -746,11 +765,10 @@ class SRSAnalyticalSolver(Solver, ABC):
             return poses + [poses[-1] @ self.flange_to_ee]
         if qpos.ndim != 2 or qpos.shape[1] != 7 or not np.all(np.isfinite(qpos)):
             raise ValueError("qpos must be finite and have shape (7,) or (N, 7)")
-        transforms = self._joint_transforms(qpos)
         poses = np.empty((len(qpos), 8, 4, 4))
         pose = self.world_to_base
-        for index in range(7):
-            pose = pose @ transforms[:, index]
+        for index, transform in enumerate(self._iter_joint_transforms(qpos)):
+            pose = pose @ transform
             poses[:, index] = pose
         poses[:, 7] = pose @ self.flange_to_ee
         return poses
@@ -776,10 +794,7 @@ class SRSAnalyticalSolver(Solver, ABC):
         ):
             raise IndexError("index must be -1 or an integer between 0 and 6")
         stop = 7 if index == -1 else index + 1
-        transform = self.world_to_base.copy()
-        transforms = self._joint_transforms(qpos, stop)
-        if qpos.ndim == 2:
-            transforms = np.moveaxis(transforms, 1, 0)
-        for joint_transform in transforms:
+        transform = self.world_to_base
+        for joint_transform in self._iter_joint_transforms(qpos, stop):
             transform = transform @ joint_transform
         return transform @ self.flange_to_ee if index == -1 else transform

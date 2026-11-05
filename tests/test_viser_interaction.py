@@ -12,6 +12,44 @@ from srs_viser.model import MODES, PRESETS
 from srs_viser.motions import PROJECTIONS
 
 
+@pytest.mark.parametrize("message", ["Event loop is closed", "unexpected stop failure"])
+def test_close_handles_only_the_closed_event_loop_race(message):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    app = LabApp.__new__(LabApp)
+    app.closed = False
+    app.server = SimpleNamespace(stop=Mock(side_effect=RuntimeError(message)))
+    if message == "Event loop is closed":
+        app.close()
+        assert app.closed
+        app.close()
+        app.server.stop.assert_called_once()
+    else:
+        with pytest.raises(RuntimeError, match=message):
+            app.close()
+        assert not app.closed
+
+
+def test_startup_cleanup_preserves_the_scene_error(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    import viser
+
+    server = SimpleNamespace(
+        stop=Mock(side_effect=RuntimeError("Event loop is closed"))
+    )
+    monkeypatch.setattr(viser, "ViserServer", lambda **kwargs: server)
+
+    def failed_scene(app):
+        raise ValueError("robot asset unavailable")
+
+    monkeypatch.setattr(LabApp, "_build_scene", failed_scene)
+    with pytest.raises(ValueError, match="robot asset unavailable"):
+        LabApp(Backend(), port=0, meshes=False)
+    server.stop.assert_called_once()
+
+
 def test_idle_coalescing_mode_switches_and_reset(monkeypatch):
     backend = Backend()
     app = LabApp(backend, port=0, meshes=False)
@@ -169,5 +207,188 @@ def test_path_plane_switch_reanchors_and_updates_displacement_plot():
         app.commands.put(("mode", MODES["manifold"]))
         app.step(1 / 30)
         assert not app.path_plane.visible
+    finally:
+        app.close()
+
+
+def test_trajectory_reference_is_reused_until_reanchored(monkeypatch):
+    from srs_viser.motions import CartesianPath
+
+    references = []
+    project = CartesianPath.project
+
+    def counted(path, points):
+        if points is path.points:
+            references.append(path)
+        return project(path, points)
+
+    monkeypatch.setattr(CartesianPath, "project", counted)
+    app = LabApp(Backend(), mode="trajectory", port=0, meshes=False)
+    try:
+        first = app.model.trajectory
+        assert references == [first]
+        app.commands.put(("play", True))
+        for _ in range(5):
+            assert app.step(1 / 30)
+        assert app.model.trajectory_steps == 5
+        assert len(app.model.trail) == 6
+        assert references == [first]
+        app.commands.put(("path_plane", "World XZ"))
+        app.step(1 / 30)
+        second = app.model.trajectory
+        assert second is not first
+        assert references == [first, second]
+        np.testing.assert_allclose(
+            app.path_reference.points[:, 0], second.points[:-1], atol=1e-7
+        )
+        assert [h.text for h in app.path_plot_labels] == ["Δx", "Δz"]
+    finally:
+        app.close()
+
+
+def test_branch_meshes_are_lazy_and_reused(monkeypatch):
+    yourdfpy = pytest.importorskip("yourdfpy")
+    import trimesh
+    from copy import deepcopy
+    from viser.extras import ViserUrdf
+
+    loads = []
+    exports = []
+    load = yourdfpy.URDF.load
+    export = trimesh.Trimesh.export
+
+    def counted(*args, **kwargs):
+        loads.append(args[0])
+        return load(*args, **kwargs)
+
+    def encoded(*args, **kwargs):
+        data = export(*args, **kwargs)
+        exports.append(data)
+        return data
+
+    monkeypatch.setattr(yourdfpy.URDF, "load", counted)
+    monkeypatch.setattr(trimesh.Trimesh, "export", encoded)
+    app = LabApp(Backend(), port=0, meshes=True)
+    try:
+        initial_exports = len(exports)
+        assert len(app._robot_meshes) == len(app._robot_description.scene.geometry)
+        assert not app.gallery_robots
+        app.mesh_toggle.value = False
+        app.commands.put(("mode", MODES["branches"]))
+        app.step(1 / 30)
+        assert not app.gallery_robots
+        app.mesh_toggle.value = True
+        app.commands.put(("mesh_toggle", True))
+        app.step(1 / 30)
+        robots = tuple(app.gallery_robots)
+        assert len(robots) == 8
+        assert len(loads) == 1
+        assert len(exports) == initial_exports
+        descriptions = [app._robot_description, *[robot._urdf for robot in robots]]
+        assert len({id(description) for description in descriptions}) == 9
+        for description in descriptions[1:]:
+            assert description._cfg is not descriptions[0]._cfg
+            assert description.scene.graph is not descriptions[0].scene.graph
+            assert all(
+                description.scene.geometry[name] is mesh
+                for name, mesh in descriptions[0].scene.geometry.items()
+            )
+        preserved = [description.cfg.copy() for description in descriptions]
+        robots[0].update_cfg(np.full(7, 0.1))
+        for description, cfg in zip(descriptions[2:], preserved[2:]):
+            np.testing.assert_array_equal(description.cfg, cfg)
+        np.testing.assert_array_equal(descriptions[0].cfg, preserved[0])
+        robots[0].update_cfg(preserved[1])
+        # The cached GLBs are byte-identical to Viser's normal exports even
+        # after the primary robot's joints have moved from their URDF defaults.
+        reference = ViserUrdf(
+            app.server,
+            deepcopy(app._robot_description),
+            root_node_name="/reference/robot",
+        )
+        assert exports[initial_exports:] == list(app._robot_meshes.values())
+        reference.show_visual = False
+        assert [r.show_visual for r in robots] == [
+            q is not None for q in app.model.gallery()
+        ]
+        app.commands.put(("mode", MODES["arm-angle"]))
+        app.step(1 / 30)
+        assert not any(r.show_visual for r in robots)
+        app.commands.put(("mode", MODES["branches"]))
+        app.step(1 / 30)
+        assert tuple(app.gallery_robots) == robots
+        app.commands.put(("mode", MODES["arm-angle"]))
+        app.labels.value = True
+        app.commands.put(("labels", True))
+        app.step(1 / 30)
+        assert all(label.visible for label in app.sew_labels)
+        app.guides.value = False
+        app.commands.put(("guides", False))
+        app.step(1 / 30)
+        assert not app.circle.visible and not app.axis.visible
+        assert not any(label.visible for label in app.sew_labels)
+    finally:
+        app.close()
+
+
+def test_branch_mode_starts_with_meshes_before_primary_joint_updates():
+    pytest.importorskip("yourdfpy")
+    # Starting directly in the gallery copies a freshly queried scene graph.
+    # Trimesh can cache unpickleable dict views there until the first joint edit.
+    app = LabApp(Backend(), mode="branches", port=0, meshes=True)
+    try:
+        assert len(app.gallery_robots) == 8
+        assert all(robot.show_visual for robot in app.gallery_robots)
+        assert not app.robot.show_visual
+        app.commands.put(("play", True))
+        assert app.step(1 / 30)
+        assert app.model.play
+        assert app.model.diagnostics()["position_m"] < 1e-5
+    finally:
+        app.close()
+
+
+def test_large_circle_plot_stays_above_floor_and_keeps_displacement_origin():
+    app = LabApp(Backend(), mode="trajectory", port=0, meshes=False)
+    try:
+        app.commands.put(("path_kind", "Circle"))
+        app.commands.put(("path_radius", 0.1))
+        app.step(1 / 30)
+        reference = app.path_plot_reference.points
+        assert reference[..., 2].min() > 0.1
+        zero = app.path_plot_axes.points[0, 0]
+        np.testing.assert_array_equal(
+            app.path_plot_current.points[0],
+            zero.astype(app.path_plot_current.points.dtype),
+        )
+        expected = app.model.trajectory.project(app.model.trajectory.points) * 6
+        actual = reference[:, 0][:, (0, 2)] - zero[[0, 2]]
+        np.testing.assert_allclose(actual, expected[:-1], atol=2e-7)
+        assert app.path_plot_labels[0].position[0] > reference[..., 0].max()
+        assert app.path_plot_labels[1].position[2] > reference[..., 2].max()
+        app.commands.put(("path_kind", "Figure eight"))
+        app.step(1 / 30)
+        np.testing.assert_allclose(
+            app.path_plot_current.points[0], [1.5, 0, 0.75], atol=1e-7
+        )
+    finally:
+        app.close()
+
+
+def test_joint_slider_degree_endpoints_stay_inside_physical_limits():
+    app = LabApp(Backend(), port=0, meshes=False)
+    try:
+        for index in range(7):
+            for limits in (app.model.backend.lower, app.model.backend.upper):
+                app.commands.put(("reset", None))
+                # A browser slider rounds displayed degrees to its 0.1-degree step.
+                endpoint = np.deg2rad(round(float(np.rad2deg(limits[index])), 1))
+                app.commands.put(("joint", (index, endpoint)))
+                app.step(1 / 30)
+                q = app.model.q
+                assert np.all(q >= app.model.backend.lower)
+                assert np.all(q <= app.model.backend.upper)
+                assert abs(q[index] - limits[index]) < 2e-7
+                assert app.model.solved and not app.model.play
     finally:
         app.close()
