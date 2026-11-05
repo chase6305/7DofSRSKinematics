@@ -1,47 +1,41 @@
 # 7DofSRSKinematics
 
-中文 | [English](README_EN.md) · [Warp 后端](https://github.com/chase6305/7DofSRSKinematicsWarp)
+English | [简体中文](README_ZH.md) · [Warp version](https://github.com/chase6305/7DofSRSKinematicsWarp)
 
-基于 NumPy 的 7 自由度 S-R-S 机械臂解析运动学，内置 KUKA iiwa 7 R800。
+NumPy analytical kinematics for 7-DoF S-R-S arms, with a KUKA iiwa 7 R800 example.
 
-**Demo 1 · 固定 TCP 自运动，臂角 ±90°**
+- Analytical FK / IK, eight S/E/W branches and arm-angle control.
+- Batched link poses, Jacobians and null-space motion.
+- Interactive demos and CSV export.
 
-![末端固定、肘部大幅度自运动](docs/media/self-motion.gif)
+## Demos
 
-**Demo 2 · 8 字轨迹跟踪，180 × 90 mm**
+### Fixed-TCP self-motion · ±90° arm-angle sweep
 
-![8 字参考路径与实际末端轨迹](docs/media/trajectory.gif)
+![Fixed TCP with a large elbow sweep](docs/media/self-motion.gif)
 
-两段独立的 NumPy 实录，每段 10 秒。
+### Figure-eight TCP tracking · 180 × 90 mm
 
-- 解析 FK / IK、八种肩肘腕构型与连续臂角控制。
-- 批量 FK、精确构型求解、解析雅可比与零空间运动。
-- 核心仅依赖 NumPy；交互演示和机器人资产随安装包提供。
+![Figure-eight reference and actual TCP trace](docs/media/trajectory.gif)
 
-## 运行演示
+Two ten-second recordings of the running viewer.
+
+## Quick start
+
+Python 3.8+:
 
 ```bash
 python -m pip install -e '.[visualization]'
-srs-viser-lab --demo arm-angle --amplitude 90 --frequency 0.1 --joint-speed 2 --autoplay
+srs-viser-lab --demo arm-angle --amplitude 90 --joint-speed 2 --autoplay
+# Or run the figure-eight demo:
+srs-viser-lab --demo trajectory --path-size 0.09 --autoplay
 ```
 
-打开 **http://127.0.0.1:8081**。通过 Experiment 切换实验，Play 暂停/继续；
-拖动 TCP 控制器可选择新目标。右侧显示实际位姿误差和关节限位余量。
-
-| 实验 | 看点 |
-|:--|:--|
-| Arm angle | TCP 固定，肘部沿圆周自运动 |
-| Eight branches | 八种 S/E/W 构型的机器人模型并列展示 |
-| Jacobian | 速度椭球与固定 TCP 的关节居中 |
-| TCP trajectory | 直线、圆、8 字路径与实际轨迹对照 |
-| Self-motion manifold | 固定 TCP 的关节空间分支曲线 |
-
-第二个 demo：`srs-viser-lab --demo trajectory --path-size 0.09 --frequency 0.1 --autoplay`。
-[更多运行方式、截图与 CSV 导出 →](docs/demos.md)
+Open <http://127.0.0.1:8081>. Select an experiment and toggle **Play**.
+The sidebar also offers eight branches, a Jacobian ellipsoid and the self-motion
+manifold. [Controls and CSV export](docs/demos.md).
 
 ## Python API
-
-只使用求解器：`python -m pip install -e .`。
 
 ```python
 import numpy as np
@@ -51,20 +45,35 @@ solver = KUKAiiwaSolver()
 target = solver.get_fk(np.array([0.3, -0.5, 0.7, 1.0, -0.4, 0.8, -0.2]))
 ok, joints = solver.get_ik(target, np.zeros(7), num_samples=73)
 if ok:
-    print(joints)  # (7,), radians
+    print(joints)  # radians
 ```
 
-默认连续搜索优先保持 seed 附近的构型；`search_mode="global"` 枚举臂角样本。
-有限采样不保证找到所有可行解。[批量接口与数值约定 →](docs/api.md)
+[API reference](docs/api.md) covers batch shapes, frames and limits.
 
-## 文档与验证
+## Benchmark
 
-- [交互实验与录制](docs/demos.md) · [API](docs/api.md)
-- [测试、基准与后端对照](docs/development.md) · [贡献指南](CONTRIBUTING.md)
-- [R800 资产、PBR 材质与 iiwa14 参考分析](docs/assets.md) · [资产许可证](urdf/ASSET_LICENSE)
+4096 poses on one Ryzen 9 9950X CPU thread, NumPy 2.2.6:
 
-```bash
-python -m pip install -e '.[test]'
-python -m pytest -q
-srs-viser-lab --validate-only
-```
+| Operation | Median latency |
+| --- | ---: |
+| FK | 1.272 ms |
+| All link poses | 1.840 ms |
+| Jacobian | 1.806 ms |
+
+Warmed batch calls, including input validation.
+[Raw results](docs/benchmarks/batch-chain.json).
+
+## References
+
+- Shimizu et al. (2008). [Analytical Inverse Kinematic Computation for 7-DOF
+  Redundant Manipulators With Joint Limits and Its Application to Redundancy
+  Resolution](https://doi.org/10.1109/TRO.2008.2003266).
+  *IEEE Transactions on Robotics*, 24(5), 1131–1142.
+- Faria et al. (2018). [Position-based kinematics for 7-DoF serial manipulators
+  with global configuration control, joint limit and singularity
+  avoidance](https://doi.org/10.1016/j.mechmachtheory.2017.10.025).
+  *Mechanism and Machine Theory*, 121, 317–334.
+
+The implementation follows the arm-angle formulation, with sampled arm-angle
+search rather than complete analytical feasible-interval construction.
+See [implementation differences](docs/paper-comparison.md).

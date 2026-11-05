@@ -105,7 +105,7 @@ def test_trajectory_and_manifold_controls_render_and_reanchor():
         assert app.path_root.visible and app.path_trace.visible
         assert app.path_kind.value == "Circle"
         assert app.model.trajectory_steps == 1
-        assert "Accepted steps" in app.metrics.content
+        assert "Accepted steps" in app.diagnostics.content
         q = app.model.q.copy()
         app.commands.put(("mode", MODES["manifold"]))
         assert app.step(1 / 30)

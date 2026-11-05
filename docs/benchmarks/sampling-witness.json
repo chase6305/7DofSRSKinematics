@@ -1,0 +1,39 @@
+{
+  "q": [
+    0.3,
+    -0.5,
+    0.7,
+    1.0,
+    -0.4,
+    0.8,
+    -0.2
+  ],
+  "seed": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "limit_half_width_rad": 0.0001,
+  "arm_angle_rad": -2.7474142555567918,
+  "numpy": {
+    "exact_success": true,
+    "position_error_m": 5.551115123125783e-17,
+    "global_73_success": false
+  },
+  "fallback": {
+    "exact_success": true,
+    "global_73_success": false
+  },
+  "warp_cpu": {
+    "exact_success": true,
+    "global_73_success": false
+  },
+  "warp_cuda": {
+    "exact_success": true,
+    "global_73_success": false
+  }
+}
