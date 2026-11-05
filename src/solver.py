@@ -256,10 +256,14 @@ class Solver(ISolver):
         if pose.shape != (4, 4) or not np.all(np.isfinite(pose)):
             raise ValueError(f"{name} must be a finite 4x4 matrix")
         rotation = pose[:3, :3]
+        # Impossible magnitudes can be rejected before squared products.
+        scale = np.max(np.abs(rotation))
         if (
-            not np.allclose(pose[3], [0.0, 0.0, 0.0, 1.0], atol=1e-8, rtol=0.0)
-            or not np.allclose(rotation.T @ rotation, np.eye(3), atol=1e-7, rtol=0.0)
-            or not np.isclose(np.linalg.det(rotation), 1.0, atol=1e-7, rtol=0.0)
+            scale < 0.5
+            or scale > 1.0 + 1e-7
+            or np.any(np.abs(pose[3] - [0.0, 0.0, 0.0, 1.0]) > 1e-8)
+            or np.any(np.abs(rotation.T @ rotation - np.eye(3)) > 1e-7)
+            or abs(np.linalg.det(rotation) - 1.0) > 1e-7
         ):
             raise ValueError(f"{name} must be a rigid homogeneous transform")
         return pose

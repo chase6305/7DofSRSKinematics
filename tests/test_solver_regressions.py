@@ -428,3 +428,22 @@ def test_quantized_workspace_boundary_still_obeys_position_tolerance(search_mode
         target, q + 0.02, num_samples=73, search_mode=search_mode
     )
     assert not ok and solution is None
+
+
+@pytest.mark.parametrize("magnitude", [1e200, 1e-200])
+def test_extreme_finite_rotation_is_rejected_before_unsafe_matrix_products(magnitude):
+    solver = KUKAiiwaSolver()
+    pose = np.eye(4)
+    pose[:3, :3] *= magnitude
+    configuration = SRSConfiguration(1, 1, 1, 0.0)
+    calls = (
+        lambda: solver.get_ik(pose, JOINTS),
+        lambda: solver.solve_configuration(pose, configuration, JOINTS),
+        lambda: solver.solve_configurations(pose, [configuration], JOINTS),
+        lambda: solver.set_tcp(pose),
+    )
+    with np.errstate(all="raise"):
+        for operation in calls:
+            with pytest.raises(ValueError, match="rigid"):
+                operation()
+    np.testing.assert_array_equal(solver.get_tcp(), np.eye(4))
