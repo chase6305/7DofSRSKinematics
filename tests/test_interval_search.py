@@ -1,5 +1,6 @@
 """Limit-boundary queries recover valid targets between uniform samples."""
 
+import json
 from itertools import product
 
 import numpy as np
@@ -191,3 +192,60 @@ def test_asymmetric_narrow_boxes_across_branches_and_turns():
         assert_solution(
             solver, solver.get_fk(q), np.zeros(7), "interval", pose_atol=1e-7
         )
+
+
+@pytest.mark.parametrize("cases,samples", [(64, 257)])
+def test_interval_covers_dense_grid_feasible_cases(cases, samples):
+    solver = KUKAiiwaSolver()
+    lower = solver.lower_position_limits.copy()
+    upper = solver.upper_position_limits.copy()
+    rng = np.random.default_rng(96216)
+    labels = {
+        (True, True): "both_succeeded",
+        (False, False): "both_failed",
+        (False, True): "interval_only",
+        (True, False): "dense_only",
+    }
+    counts = dict.fromkeys(labels.values(), 0)
+    max_position = max_rotation = 0.0
+    for index in range(cases):
+        q = rng.uniform(lower, upper)
+        target, seed = solver.get_fk(q), rng.uniform(-2, 2, 7)
+        center = q.copy() if index % 3 == 0 else rng.uniform(-3, 3, 7)
+        widths = 10.0 ** rng.uniform(-3, 0.5, 7)
+        solver.set_position_limits(
+            center - widths * rng.uniform(0.1, 1, 7),
+            center + widths * rng.uniform(0.1, 1, 7),
+        )
+        dense, _ = solver.get_ik(
+            target, seed, num_samples=samples, search_mode="global"
+        )
+        ok, joints = solver.get_ik(target, seed, search_mode="interval")
+        if dense:
+            assert ok, f"interval search missed a grid solution in case {index}"
+        counts[labels[dense, ok]] += 1
+        if ok:
+            assert np.all(joints >= solver.lower_position_limits)
+            assert np.all(joints <= solver.upper_position_limits)
+            actual = solver.get_fk(joints)
+            position = np.linalg.norm(actual[:3, 3] - target[:3, 3])
+            rotation = 2 * np.arcsin(
+                np.clip(
+                    np.linalg.norm(actual[:3, :3] - target[:3, :3]) / np.sqrt(8), 0, 1
+                )
+            )
+            assert position < 1e-7 and rotation < 1e-7
+            max_position = max(max_position, position)
+            max_rotation = max(max_rotation, rotation)
+    print(
+        json.dumps(
+            {
+                "cases": cases,
+                "dense_arm_angle_samples": samples,
+                "seed": 96216,
+                **counts,
+                "max_interval_position_error_m": float(max_position),
+                "max_interval_rotation_error_rad": float(max_rotation),
+            }
+        )
+    )

@@ -80,6 +80,13 @@ reuse reduced median per-query latency from 0.543 to 0.276 ms. Cached and
 uncached outputs were identical. [Interval-query data](benchmarks/interval-query.json)
 records all trials, residuals and the command; these are complete backend calls.
 
+An extended dense-grid regression checks 1,200 independent joint boxes against
+2,048 uniform arm-angle samples. Interval search covers all 327 grid successes
+and finds 73 additional valid targets; both searches fail on 800 cases, which
+does not establish unreachability. [Feasibility data](benchmarks/interval-feasibility.json)
+records the generator command and residuals. This empirical check complements
+the [paper scope comparison](paper-comparison.md).
+
 ## References
 
 - Shimizu et al., “Analytical Inverse Kinematic Computation for 7-DOF Redundant Manipulators With
