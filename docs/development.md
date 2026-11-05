@@ -38,6 +38,14 @@ bundled R800 geometry and mesh provenance.
 At 256 or more robots, DH evaluation reuses one matrix buffer instead of
 materializing all seven joint transforms. Small batches keep the eager path.
 
+Repeated 584-request manifold batches now reuse frozen configurations and
+branch/angle metadata. Complete warmed calls changed from 1.363 to 0.552 ms
+(about 59% lower latency) against the preceding implementation. The comparison
+uses CPU affinity 30, one BLAS/OpenMP thread and ABBA process order, with 30
+raw trials per revision. [Request-reuse data](benchmarks/request-reuse.json)
+includes the commands, revisions and all measured workloads. These are CPU
+exact-query timings, including request construction and output conversion.
+
 ## Reproduce benchmarks
 
 ```bash
