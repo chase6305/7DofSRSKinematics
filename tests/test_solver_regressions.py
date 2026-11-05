@@ -407,3 +407,24 @@ def test_global_weight_ranking_is_invariant_to_finite_common_scale(scale):
     assert ok
     np.testing.assert_allclose(actual, expected, atol=1e-12, rtol=0)
     np.testing.assert_array_equal(solver.get_ik_nearst_weight(), weights * scale)
+
+
+@pytest.mark.parametrize("search_mode", ["continuous", "global"])
+def test_quantized_workspace_boundary_still_obeys_position_tolerance(search_mode):
+    solver = KUKAiiwaSolver()
+    q = np.zeros(7)
+    target = solver.get_fk(q).astype(np.float32)
+    ok, solution = solver.get_ik(
+        target, q + 0.02, num_samples=73, search_mode=search_mode
+    )
+    assert ok
+    actual = solver.get_fk(solution)
+    assert np.linalg.norm(actual[:3, 3] - target[:3, 3]) < 1e-7
+    np.testing.assert_allclose(actual[:3, :3], target[:3, :3], atol=1e-7, rtol=0)
+    # Rounding puts this target slightly beyond full extension. A stricter
+    # requested residual must still reject its projected boundary solution.
+    assert solver.set_iteration_params(pos_eps=1e-9)
+    ok, solution = solver.get_ik(
+        target, q + 0.02, num_samples=73, search_mode=search_mode
+    )
+    assert not ok and solution is None

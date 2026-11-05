@@ -56,31 +56,16 @@ class SRSAnalyticalSolver(Solver, ABC):
         self.dof = 7
 
     def get_dof(self) -> int:
-        r"""Returns the degree of freedom (DOF) of the robot.
-
-        Returns:
-            int: The degree of freedom of the robot.
-        """
+        """Return the number of joints."""
         return self.dof
 
     def get_urdf_path(self) -> str:
-        r"""Returns the file path to the URDF (Unified Robot Description Format) file.
-
-        Returns:
-            str: The file path to the URDF file.
-        """
+        """Return the robot URDF path."""
         return self.urdf_path
 
     @staticmethod
     def skew(vector: np.ndarray) -> np.ndarray:
-        r"""Compute the skew-symmetric matrix of a vector.
-
-        Args:
-            vector (np.ndarray): A 3D vector.
-
-        Returns:
-            np.ndarray: The skew-symmetric matrix of the input vector.
-        """
+        """Return the cross-product matrix of a three-vector."""
         return np.array(
             [
                 [0, -vector[2], vector[1]],
@@ -92,8 +77,19 @@ class SRSAnalyticalSolver(Solver, ABC):
     def _dh_calc(self, d, alpha, a, theta) -> np.ndarray:
         """Build standard DH transforms, broadcasting over joint arrays."""
         d, alpha, a, theta = np.broadcast_arrays(d, alpha, a, theta)
-        ct, st, ca, sa = np.cos(theta), np.sin(theta), np.cos(alpha), np.sin(alpha)
-        transforms = np.zeros(theta.shape + (4, 4))
+        return self._fill_dh(
+            np.zeros(theta.shape + (4, 4)),
+            d,
+            a,
+            np.cos(theta),
+            np.sin(theta),
+            np.cos(alpha),
+            np.sin(alpha),
+        )
+
+    @staticmethod
+    def _fill_dh(transforms, d, a, ct, st, ca, sa):
+        """Fill DH entries in zeroed output storage."""
         transforms[..., 0, 0] = ct
         transforms[..., 0, 1] = -st * ca
         transforms[..., 0, 2] = st * sa
@@ -107,6 +103,30 @@ class SRSAnalyticalSolver(Solver, ABC):
         transforms[..., 2, 3] = d
         transforms[..., 3, 3] = 1.0
         return transforms
+
+    def _iter_joint_transforms(self, qpos, stop=7):
+        """Yield joint transforms; large batches reuse one matrix buffer."""
+        if qpos.ndim != 2 or len(qpos) < 256:
+            transforms = self._joint_transforms(qpos, stop)
+            if qpos.ndim > 1:
+                transforms = np.moveaxis(transforms, -3, 0)
+            yield from transforms
+            return
+        d, alpha, a, theta = self.dh_params[:stop].T
+        angles = qpos[:, :stop] + theta
+        ct, st = np.cos(angles), np.sin(angles)
+        ca, sa = np.cos(alpha), np.sin(alpha)
+        transform = np.zeros((len(qpos), 4, 4))
+        for index in range(stop):
+            yield self._fill_dh(
+                transform,
+                d[index],
+                a[index],
+                ct[:, index],
+                st[:, index],
+                ca[index],
+                sa[index],
+            )
 
     def _joint_transforms(self, qpos, stop=7):
         d, alpha, a, theta = self.dh_params[:stop].T
@@ -129,14 +149,7 @@ class SRSAnalyticalSolver(Solver, ABC):
         return self.flange_to_ee.copy()
 
     def _configuration(self, rconf: int) -> tuple:
-        r"""Determine the configuration of the arm, elbow, and wrist based on a configuration integer.
-
-        Args:
-            rconf (int): The configuration integer.
-
-        Returns:
-            tuple: A tuple containing the configurations of the arm, elbow, and wrist.
-        """
+        """Decode shoulder, elbow and wrist signs from the three branch bits."""
         arm_config = -1 if rconf & 1 else 1
         elbow_config = -1 if rconf & 2 else 1
         wrist_config = -1 if rconf & 4 else 1
@@ -292,13 +305,12 @@ class SRSAnalyticalSolver(Solver, ABC):
             raise ValueError("step must be positive and finite")
         if qpos.ndim == 2:
             count = len(qpos)
-            transforms = self._joint_transforms(qpos)
             pose = np.broadcast_to(self.world_to_base, (count, 4, 4))
             origins, axes = np.empty((count, 7, 3)), np.empty((count, 7, 3))
-            for index in range(7):
+            for index, transform in enumerate(self._iter_joint_transforms(qpos)):
                 origins[:, index] = pose[:, :3, 3]
                 axes[:, index] = pose[:, :3, 2]
-                pose = pose @ transforms[:, index]
+                pose = pose @ transform
             tcp = (pose @ self.flange_to_ee)[:, :3, 3]
             linear = np.cross(axes, tcp[:, None] - origins)
             output = np.empty((count, 6, 7))
@@ -385,15 +397,7 @@ class SRSAnalyticalSolver(Solver, ABC):
     def _calculate_joint_angles(
         self, P_s_to_w: np.ndarray, elbow_GC4: int
     ) -> typing.Tuple[bool, typing.Optional[np.ndarray]]:
-        r"""Calculate joint angles based on the position from shoulder to wrist and elbow configuration.
-
-        Args:
-            P_s_to_w (np.ndarray): The position vector from shoulder to wrist.
-            elbow_GC4 (int): The elbow configuration parameter.
-
-        Returns:
-            np.ndarray: A boolean indicating success and an array of joint angles.
-        """
+        """Build reference shoulder/elbow angles for a reachable wrist centre."""
         d_se, d_ew = self.link_lengths[1:3]
         joints = np.zeros(7)
 
@@ -401,13 +405,15 @@ class SRSAnalyticalSolver(Solver, ABC):
         norm_P26 = np.linalg.norm(P_s_to_w)
         if norm_P26 < 1e-12:
             return False, None
-        if not (
-            d_se + d_ew + 1e-10 >= norm_P26 and norm_P26 + 1e-10 >= abs(d_se - d_ew)
-        ):
+        # Float32 pose rounding can put full extension just outside the triangle.
+        # Returned solutions still have to pass the FK residual checks.
+        if not (d_se + d_ew + 1e-6 >= norm_P26 and norm_P26 + 1e-6 >= abs(d_se - d_ew)):
             logger.debug("Specified pose outside reachable workspace.")
             return False, None
 
         elbow_cos_angle = (norm_P26**2 - d_se**2 - d_ew**2) / (2 * d_se * d_ew)
+        if abs(elbow_cos_angle) > 1.0 + 1e-6:
+            return False, None
 
         joints[3] = elbow_GC4 * np.arccos(np.clip(elbow_cos_angle, -1.0, 1.0))
 
@@ -612,15 +618,9 @@ class SRSAnalyticalSolver(Solver, ABC):
         local_layers: int = 4,
         **kwargs,
     ) -> typing.Tuple[bool, typing.Optional[np.ndarray]]:
-        """Solve a pose with deterministic arm-angle sampling.
+        """Solve one rigid target, preferring the seed branch in continuous mode.
 
-        ``continuous`` returns the first valid nearby solution, preferring the
-        seed branch. ``global`` ranks all sampled branches by weighted Euclidean
-        joint distance; this is a sampled optimum, not a continuous one.
-        ``num_samples`` overrides the configured default for this call only.
-        Invalid inputs raise ValueError; an unavailable solution returns
-        ``(False, None)``. Both modes enforce joint limits and elbow preference.
-        """
+        Returns (False, None) when no candidate meets the pose and joint limits."""
         if "num_sample" in kwargs:
             if num_samples is not None:
                 raise TypeError("Use only one of num_samples and num_sample")
@@ -764,11 +764,10 @@ class SRSAnalyticalSolver(Solver, ABC):
             return poses + [poses[-1] @ self.flange_to_ee]
         if qpos.ndim != 2 or qpos.shape[1] != 7 or not np.all(np.isfinite(qpos)):
             raise ValueError("qpos must be finite and have shape (7,) or (N, 7)")
-        transforms = self._joint_transforms(qpos)
         poses = np.empty((len(qpos), 8, 4, 4))
         pose = self.world_to_base
-        for index in range(7):
-            pose = pose @ transforms[:, index]
+        for index, transform in enumerate(self._iter_joint_transforms(qpos)):
+            pose = pose @ transform
             poses[:, index] = pose
         poses[:, 7] = pose @ self.flange_to_ee
         return poses
@@ -795,9 +794,6 @@ class SRSAnalyticalSolver(Solver, ABC):
             raise IndexError("index must be -1 or an integer between 0 and 6")
         stop = 7 if index == -1 else index + 1
         transform = self.world_to_base.copy()
-        transforms = self._joint_transforms(qpos, stop)
-        if qpos.ndim == 2:
-            transforms = np.moveaxis(transforms, 1, 0)
-        for joint_transform in transforms:
+        for joint_transform in self._iter_joint_transforms(qpos, stop):
             transform = transform @ joint_transform
         return transform @ self.flange_to_ee if index == -1 else transform

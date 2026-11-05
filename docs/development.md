@@ -28,6 +28,9 @@ Batched FK and Jacobians traverse all robots together. See [API contracts](api.m
 for shapes, limits, frames and scalar behavior, and [assets](assets.md) for the
 bundled R800 geometry and mesh provenance.
 
+At 256 or more robots, DH evaluation reuses one matrix buffer instead of
+materializing all seven joint transforms. Small batches keep the eager path.
+
 ## Reproduce benchmarks
 
 ```bash
@@ -50,9 +53,13 @@ Recorded local comparisons (Python 3.10, NumPy 2.2.6):
 |:--|--:|--:|
 | 4096 Jacobians | Scalar loop: 118.003 ms | Batched: 2.602 ms |
 | First eight-branch gallery opening | `8174d96`: 545 ms | 254 ms |
+| 4096 batched FK, CPU | `7e18cdc`: 1.543 ms / 5.28 MB | 1.144 ms / 2.26 MB |
 
 See [Jacobian samples](benchmarks/jacobian.json) and
 [viewer samples](benchmarks/viewer.json) for environments and raw trials.
+[Batch-chain data](benchmarks/batch-chain.json) records before/after FK, link-pose
+and Jacobian calls, including input validation and peak tracked allocations
+(outputs included, decimal MB). It uses one CPU thread and checks equal outputs.
 Jacobian timing includes stacking the scalar results. Gallery timing includes
 IK and server scene construction, excluding initial app construction, network,
 browser and WebGL; it uses Viser 1.0.24, yourdfpy 0.0.60 and trimesh 4.12.2.
