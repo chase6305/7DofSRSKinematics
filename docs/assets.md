@@ -56,4 +56,4 @@ Source geometry is the `iiwa7-mujoco` model derived from ROS `iiwa_stack`.
 The supplied BSD-3-Clause notice is retained in
 [urdf/ASSET_LICENSE](../urdf/ASSET_LICENSE). The asset and material generator
 is included in both repositories; neither needs an external asset checkout at
-runtime. Legacy Warp `meshes/` resources remain available for existing callers.
+runtime. Both repositories include the URDF's visual and collision resources.
