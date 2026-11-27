@@ -268,7 +268,7 @@ def test_scan_finds_both_arms_below_movable_mounts_and_skips_gripper_joints(tmp_
     _fixed_joint(
         robot,
         "wrist_camera",
-        "left_link_7",
+        "left_link_ee",
         "left_camera",
         xyz="0.05 -0.02 -0.018",
         rpy="0.4 -0.3 0.2",

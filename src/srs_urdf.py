@@ -234,26 +234,31 @@ class _URDFTree:
 
     def frames(self, chain):
         # A scan can visit the same joints through several fixed tool branches.
-        frames = []
-        for joint in chain:
-            if joint not in self._frames:
-                self._frames[joint] = _joint_frame(joint, self.version)
-            frames.append(self._frames[joint])
-        return frames
+        return [self._frame(joint) for joint in chain]
 
-    def fixed_tips(self, link):
-        stack = [link]
+    def _frame(self, joint):
+        if joint not in self._frames:
+            self._frames[joint] = _joint_frame(joint, self.version)
+        return self._frames[joint]
+
+    def fixed_tips(self, link, *, with_transforms):
+        # Carry the accumulated fixed pose so each shared prefix is composed once.
+        stack = [(link, np.eye(4) if with_transforms else None)]
         while stack:
-            current = stack.pop()
+            current, offset = stack.pop()
             children = self.children[current]
-            fixed = [
-                child
-                for child in children
-                if self.parents[child][1].get("type") == "fixed"
-            ]
-            if not children or len(fixed) < len(children):
-                yield current
-            stack.extend(fixed)
+            terminal = not children
+            for child in children:
+                joint = self.parents[child][1]
+                if joint.get("type") != "fixed":
+                    terminal = True
+                    continue
+                child_offset = (
+                    None if offset is None else offset @ self._frame(joint)[0]
+                )
+                stack.append((child, child_offset))
+            if terminal:
+                yield current, offset
 
     def rotary_windows(self, base):
         # Track the base of each of the last seven contiguous rotary joints.
@@ -586,27 +591,19 @@ def analyze_urdf(
     return _analyze_chain(tree, base, tip, position_tolerance, angle_tolerance)
 
 
-def _with_fixed_tip(analysis, tree, tip):
+def _with_fixed_tip(analysis, tip, offset):
     if tip == analysis.tip_link:
         return analysis
     result = deepcopy(analysis)
     result.tip_link = tip
     params = result.parameters
     if params is not None:
-        frames = tree.frames(tree.chain(analysis.tip_link, tip))
-        try:
-            with np.errstate(over="raise", invalid="raise"):
-                _, _, offset = _chain_state(frames, capture_axes=False)
-                # Move the canonical flange along J7 by the added axial offset.
-                axial = params.flange_to_tip[2, :3] @ offset[:3, 3]
-                params.link_lengths[-1] += axial
-                params.dh_params[-1, 0] = params.link_lengths[-1]
-                params.flange_to_tip = params.flange_to_tip @ offset
-                params.flange_to_tip[2, 3] -= axial
-        except FloatingPointError as exc:
-            raise ValueError(
-                f"Could not compute a finite tool transform to {tip!r}"
-            ) from exc
+        # Move the canonical flange along J7 by the added axial offset.
+        axial = params.flange_to_tip[2, :3] @ offset[:3, 3]
+        params.link_lengths[-1] += axial
+        params.dh_params[-1, 0] = params.link_lengths[-1]
+        params.flange_to_tip = params.flange_to_tip @ offset
+        params.flange_to_tip[2, 3] -= axial
     return result
 
 
@@ -631,10 +628,18 @@ def scan_urdf(
             tree, base, last_rotary_link, position_tolerance, angle_tolerance
         )
         if result.is_srs or include_rejected:
-            matches.extend(
-                _with_fixed_tip(result, tree, tip)
-                for tip in tree.fixed_tips(last_rotary_link)
-            )
+            try:
+                with np.errstate(over="raise", invalid="raise"):
+                    tips = tree.fixed_tips(
+                        last_rotary_link, with_transforms=result.solver_compatible
+                    )
+                    matches.extend(
+                        _with_fixed_tip(result, tip, offset) for tip, offset in tips
+                    )
+            except FloatingPointError as exc:
+                raise ValueError(
+                    f"Could not compute finite tool transforms below {last_rotary_link!r}"
+                ) from exc
     return tuple(sorted(matches, key=lambda match: (match.base_link, match.tip_link)))
 
 
