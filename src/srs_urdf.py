@@ -127,7 +127,7 @@ class SRSAnalysis:
             raise ValueError(
                 "Selected URDF joint names or types changed since analysis"
             )
-        frames = _joint_frames(chain, tree.version)
+        frames = tree.frames(chain)
 
         _, _, reference = _chain_state(
             frames, joints.reshape(-1, 7), capture_axes=False
@@ -163,6 +163,7 @@ class _URDFTree:
 
         self.children = {link: [] for link in links}
         self.parents = {}
+        self._frames = {}
         names = set()
         for joint in robot.findall("joint"):
             name = joint.get("name")
@@ -205,16 +206,18 @@ class _URDFTree:
 
     def sole_leaf(self, base):
         stack = [base]
-        leaves = []
+        tip = None
         while stack:
             link = stack.pop()
             if self.children[link]:
                 stack.extend(self.children[link])
+            elif tip is not None:
+                raise ValueError(
+                    "Multiple leaf links below the base; use --tip or --scan"
+                )
             else:
-                leaves.append(link)
-        if len(leaves) != 1:
-            raise ValueError("Multiple leaf links below the base; use --tip or --scan")
-        return leaves[0]
+                tip = link
+        return tip
 
     def chain(self, base, tip):
         if tip not in self.children:
@@ -227,6 +230,15 @@ class _URDFTree:
             link, joint = self.parents[link]
             chain.append(joint)
         return chain[::-1]
+
+    def frames(self, chain):
+        # A scan can visit the same joints through several fixed tool branches.
+        frames = []
+        for joint in chain:
+            if joint not in self._frames:
+                self._frames[joint] = _joint_frame(joint, self.version)
+            frames.append(self._frames[joint])
+        return frames
 
     def _fixed_tips(self, link):
         stack = [link]
@@ -307,23 +319,20 @@ def _origin_rotation(origin, name, version):
     ]
 
 
-def _joint_frames(chain, version):
-    frames = []
-    for joint in chain:
-        name = joint.get("name")
-        origin = joint.find("origin")
-        transform = np.eye(4)
-        transform[:3, :3] = _origin_rotation(origin, name, version)
-        transform[:3, 3] = _vector(origin, "xyz", "0 0 0", name)
-        axis = None
-        if joint.get("type") != "fixed":
-            axis_element = joint.find("axis")
-            if axis_element is not None and "xyz" not in axis_element.attrib:
-                raise ValueError(f"Missing xyz in axis of joint {name!r}")
-            axis = _vector(axis_element, "xyz", "1 0 0", name)
-            axis = _unit_vector(axis, f"rotation axis on joint {name!r}")
-        frames.append((transform, axis))
-    return frames
+def _joint_frame(joint, version):
+    name = joint.get("name")
+    origin = joint.find("origin")
+    transform = np.eye(4)
+    transform[:3, :3] = _origin_rotation(origin, name, version)
+    transform[:3, 3] = _vector(origin, "xyz", "0 0 0", name)
+    axis = None
+    if joint.get("type") != "fixed":
+        axis_element = joint.find("axis")
+        if axis_element is not None and "xyz" not in axis_element.attrib:
+            raise ValueError(f"Missing xyz in axis of joint {name!r}")
+        axis = _vector(axis_element, "xyz", "1 0 0", name)
+        axis = _unit_vector(axis, f"rotation axis on joint {name!r}")
+    return transform, axis
 
 
 def _chain_state(frames, angles=None, *, capture_axes=True):
@@ -389,12 +398,22 @@ def _joint_limits(joints, version):
     return tuple(limits)
 
 
-def _angle_about(axis, source, target, allow_opposite=False):
-    sine = axis @ np.cross(source, target)
-    cosine = source @ target - (axis @ source) * (axis @ target)
-    if allow_opposite and cosine < 0.0:
-        sine, cosine = -sine, -cosine
-    return np.arctan2(sine, cosine)
+def _reference_angles(axes, upper_axis, forearm_axis):
+    # Rotate J2--J6 from their URDF home frames. An axis may be matched in
+    # either direction for a smaller offset, except J4 where zero extends the arm.
+    a1, a2, _, a4, _, a6, a7 = axes
+    source = np.stack((upper_axis, a4, forearm_axis, a6, a7))
+    target = np.stack((a1, -a2, upper_axis, -a4, forearm_axis))
+    rotation_axes = axes[1:6]
+    sine = np.sum(rotation_axes * np.cross(source, target), axis=1)
+    cosine = np.sum(source * target, axis=1) - (
+        np.sum(rotation_axes * source, axis=1) * np.sum(rotation_axes * target, axis=1)
+    )
+    direction = np.where(cosine < 0.0, -1.0, 1.0)
+    direction[2] = 1.0
+    zero = np.zeros(7)
+    zero[1:6] = np.arctan2(direction * sine, direction * cosine)
+    return zero
 
 
 def _canonical_parameters(frames, axes, shoulder, upper, forearm, limits):
@@ -402,20 +421,10 @@ def _canonical_parameters(frames, axes, shoulder, upper, forearm, limits):
     # the arm. The even axes point along +Y, -Y and +Y, respectively.
     # Compute each offset in the URDF home frame. Upstream rotations
     # transform both directions equally and cancel in their relative angle.
-    a1, a2, a3, a4, a5, a6, a7 = axes
+    a1, a2, a3, _, a5, _, _ = axes
     upper_axis = a3 if a3 @ upper > 0.0 else -a3
     forearm_axis = a5 if a5 @ forearm > 0.0 else -a5
-    zero = np.array(
-        [
-            0.0,
-            _angle_about(a2, upper_axis, a1, allow_opposite=True),
-            _angle_about(a3, a4, -a2, allow_opposite=True),
-            _angle_about(a4, forearm_axis, upper_axis),
-            _angle_about(a5, a6, -a4, allow_opposite=True),
-            _angle_about(a6, a7, forearm_axis, allow_opposite=True),
-            0.0,
-        ]
-    )
+    zero = _reference_angles(axes, upper_axis, forearm_axis)
     points, reference_axes, tip_pose = _chain_state(frames, zero)
     wrist, _ = _axis_center(points[4:], reference_axes[4:])
     z = a1 if a1 @ (wrist - shoulder) > 0.0 else -a1
@@ -483,7 +492,7 @@ def _analyze_chain(tree, base, tip, position_tolerance, angle_tolerance):
 
     try:
         with np.errstate(over="raise", invalid="raise"):
-            frames = _joint_frames(chain, tree.version)
+            frames = tree.frames(chain)
             limits = _joint_limits(active, tree.version)
             _fit_geometry(result, frames, limits, position_tolerance, angle_tolerance)
     except (FloatingPointError, np.linalg.LinAlgError) as exc:
@@ -496,17 +505,14 @@ def _analyze_chain(tree, base, tip, position_tolerance, angle_tolerance):
 def _fit_geometry(result, frames, limits, position_tolerance, angle_tolerance):
     points, axes, _ = _chain_state(frames)
     angular_threshold = np.sin(angle_tolerance)
-    pairs = np.array([0, 1, 4, 5])
-    for name, triplet in (
-        ("Shoulder", axes[:3]),
-        ("Wrist", axes[4:]),
-    ):
-        if np.any(
-            np.linalg.norm(np.cross(triplet[:-1], triplet[1:]), axis=1)
-            <= angular_threshold
-        ):
-            result.reason = f"{name} has parallel adjacent axes"
-            return
+    first_axes, second_axes = axes[[0, 1, 4, 5]], axes[[1, 2, 5, 6]]
+    parallel = (
+        np.linalg.norm(np.cross(first_axes, second_axes), axis=1) <= angular_threshold
+    )
+    if np.any(parallel):
+        group = "Shoulder" if np.any(parallel[:2]) else "Wrist"
+        result.reason = f"{group} has parallel adjacent axes"
+        return
 
     result.shoulder_center, result.shoulder_axis_error = _axis_center(
         points[:3], axes[:3]
@@ -525,23 +531,19 @@ def _fit_geometry(result, frames, limits, position_tolerance, angle_tolerance):
     result.elbow_center = elbow
     result.elbow_axis = elbow_axis.copy()
     upper, forearm = elbow - shoulder, wrist - elbow
+    limb_axes = axes[[2, 4]]
     result.upper_arm_length = float(np.linalg.norm(upper))
     result.forearm_length = float(np.linalg.norm(forearm))
     if min(result.upper_arm_length, result.forearm_length) <= position_tolerance:
         result.reason = "The upper arm and forearm must have nonzero lengths"
-    elif np.any(
-        np.abs(np.sum(axes[pairs] * axes[pairs + 1], axis=1)) > angular_threshold
-    ):
+    elif np.any(np.abs(np.sum(first_axes * second_axes, axis=1)) > angular_threshold):
         result.reason = (
             "The solver requires orthogonal adjacent shoulder and wrist axes"
         )
-    elif np.any(np.abs(axes[[2, 4]] @ elbow_axis) > angular_threshold):
+    elif np.any(np.abs(limb_axes @ elbow_axis) > angular_threshold):
         result.reason = "The solver requires J4 perpendicular to J3 and J5"
     elif (
-        max(
-            np.linalg.norm(np.cross(upper, axes[2])),
-            np.linalg.norm(np.cross(forearm, axes[4])),
-        )
+        np.linalg.norm(np.cross([upper, forearm], limb_axes), axis=1).max()
         > position_tolerance
     ):
         result.reason = "The solver requires the upper arm and forearm along J3 and J5"
