@@ -57,6 +57,14 @@ if ok:
 默认连续搜索优先保持 seed 附近的构型；`search_mode="global"` 枚举臂角样本。
 有限采样不保证找到所有可行解。[批量接口与数值约定 →](docs/api.md)
 
+## 从 URDF 识别 S-R-S 构型
+
+```bash
+srs-identify urdf/iiwa_7.urdf --tip link_ee
+```
+
+命令输出 JSON，包含几何识别结果、肩肘腕中心及轴线交汇误差。对现有解析求解器支持的模型，还会提取 DH 参数、限位、关节零位与方向映射、基座及工具变换。通过 `--base` 和 `--tip` 可以选择分支 URDF 中的一条链。[Python 接口和 JSON 字段 →](docs/api.md#s-r-s-recognition-from-urdf)
+
 ## 文档与验证
 
 - [交互实验与录制](docs/demos.md) · [API](docs/api.md)

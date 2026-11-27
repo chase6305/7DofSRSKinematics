@@ -41,5 +41,6 @@ jobs:
         run: |
           python -m pip install --force-reinstall --no-deps dist/*.whl
           cd "$(mktemp -d)"
+          srs-identify "$(python -c 'from srs_kinematics_assets import URDF_PATH; print(URDF_PATH)')" > srs-geometry.json
           srs-viser-lab --validate-only
           srs-viser-lab --demo trajectory --plane tool-xy --path-size 0.015 --frames 12 --export-csv trajectory.csv

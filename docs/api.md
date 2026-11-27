@@ -49,3 +49,53 @@ validation are batched.
 Joint-distance weights are normalized before ranking: multiplying all weights
 by the same positive finite factor does not change the selected solution.
 Zero weights retain deterministic input ordering for tied candidates.
+
+## S-R-S recognition from URDF
+
+```bash
+srs-identify robot.urdf --base base_link --tip tool_link
+```
+
+The command defaults to the URDF root and the sole leaf below the selected base.
+Specify the tip explicitly when that subtree has multiple leaves. The tool accepts
+URDF XML with fixed joints, independent revolute joints and continuous joints on
+the selected path. It uses joint origins and axes, so mesh files are optional.
+`--position-tolerance` and `--angle-tolerance` default to `1e-6` metres and radians.
+
+The report sets `is_srs` when the seven rotary joints form two groups of three
+intersecting, nondegenerate axes with a rotary elbow between them. Shoulder and
+wrist errors are the maximum distances from their least-squares centers to the
+corresponding axes. The elbow center is the projection of the shoulder onto J4.
+Centers are expressed in the selected base frame at URDF joint zero.
+
+`solver_compatible` requires adjacent orthogonal axes in the shoulder and wrist,
+J4 perpendicular to J3 and J5, and nonzero upper-arm and forearm segments along
+J3 and J5. For compatible models, `parameters` contains standard DH rows
+`[d, alpha, a, theta]`, lengths `[d_bs, d_se, d_ew, d_wt]`, and the
+`base_to_solver` and `flange_to_tip` homogeneous transforms. The base origin is
+projected onto J1 and the tip offset along J7 is included in `d_wt`. Tolerances
+allow small deviations from ideal geometry, which is the geometry the solver
+uses. `joint_limits` lists URDF bounds in chain order, with `[null, null]` for
+continuous joints. The command exits with status 0 with extracted parameters, 1 when
+parameters are unavailable, or 2 for invalid input (diagnostic on stderr).
+
+```python
+import numpy as np
+from srs_kinematics import analyze_urdf
+
+analysis = analyze_urdf("urdf/iiwa_7.urdf", tip_link="link_ee")
+solver = analysis.make_solver()
+parameters = analysis.parameters
+q_urdf = np.array([0.3, -0.5, 0.7, 1.0, -0.4, 0.8, -0.2])
+q_solver = parameters.to_solver_joints(q_urdf)
+target = solver.get_fk(q_solver)
+ok, solution = solver.get_ik(target, q_solver + 0.05)
+if ok:
+    print(dict(zip(analysis.joint_names, parameters.to_urdf_joints(solution))))
+```
+
+The coordinate mapping is `q_solver = joint_signs * (q_urdf - joint_zero)`.
+Both mapping methods accept arrays whose last dimension is 7. Use solver
+coordinates with FK, IK and branch APIs. FK returns the selected tip pose in the
+selected URDF base frame. `make_solver()` raises `ValueError` with the analysis
+reason when parameters are unavailable.
