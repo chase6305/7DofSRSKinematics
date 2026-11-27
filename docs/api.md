@@ -74,8 +74,15 @@ J3 and J5. For compatible models, `parameters` contains standard DH rows
 `[d, alpha, a, theta]`, lengths `[d_bs, d_se, d_ew, d_wt]`, and the
 `base_to_solver` and `flange_to_tip` homogeneous transforms. The base origin is
 projected onto J1 and the tip offset along J7 is included in `d_wt`. Tolerances
-allow small deviations from ideal geometry, which is the geometry the solver
-uses. `joint_limits` lists URDF bounds in chain order, with `[null, null]` for
+bound the inferred geometry and the fit of all seven axes at the extracted
+solver reference pose. `joint_axis_position_errors` measures the distance from
+each canonical joint center to its corresponding URDF axis in metres.
+`joint_axis_angle_errors` measures the unsigned angle between each pair of axes
+in radians. Both list values in chain order when a canonical fit is attempted.
+They describe the fitted model at that reference pose. Cartesian tip errors can
+accumulate across multiple moving joints.
+
+`joint_limits` lists URDF bounds in chain order, with `[null, null]` for
 continuous joints. The command exits with status 0 with extracted parameters, 1 when
 parameters are unavailable, or 2 for invalid input (diagnostic on stderr).
 
@@ -99,3 +106,4 @@ Both mapping methods accept arrays whose last dimension is 7. Use solver
 coordinates with FK, IK and branch APIs. FK returns the selected tip pose in the
 selected URDF base frame. `make_solver()` raises `ValueError` with the analysis
 reason when parameters are unavailable.
+`analysis.to_dict()` produces the same report structure as the CLI.

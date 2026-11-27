@@ -38,6 +38,8 @@ def test_extract_bundled_iiwa_matches_solver():
     assert analysis.is_srs and analysis.solver_compatible
     assert (analysis.base_link, analysis.tip_link) == ("link_0", "link_ee")
     assert analysis.joint_names == tuple(f"joint_{i}" for i in range(1, 8))
+    assert analysis.joint_axis_position_errors.max() < 1e-12
+    assert analysis.joint_axis_angle_errors.max() < 1e-12
     params = analysis.parameters
     np.testing.assert_allclose(params.link_lengths, [0.34, 0.4, 0.4, 0.126], atol=1e-12)
     np.testing.assert_allclose(
@@ -172,6 +174,7 @@ def test_cli_outputs_json_and_reports_error_status(capsys):
     assert report["parameters"]["link_lengths"] == pytest.approx(
         [0.34, 0.4, 0.4, 0.126]
     )
+    assert max(report["joint_axis_position_errors"]) < 1e-12
     assert main([str(URDF), "--tip", "link_4"]) == 1
     report = json.loads(capsys.readouterr().out)
     assert not report["is_srs"]
@@ -180,3 +183,40 @@ def test_cli_outputs_json_and_reports_error_status(capsys):
     captured = capsys.readouterr()
     assert not captured.out
     assert "outside base" in captured.err
+
+
+def test_combined_axis_offsets_are_checked_against_the_canonical_fit(tmp_path):
+    robot = ET.parse(URDF).getroot()
+    robot.find("joint[@name='joint_2']/origin").set("xyz", "8e-7 -8e-7 0.19")
+
+    path = _write_robot(tmp_path, robot)
+    analysis = analyze_urdf(path)
+    assert analysis.is_srs
+    assert not analysis.solver_compatible
+    assert "Canonical axis" in analysis.reason
+    assert analysis.joint_axis_position_errors.max() > 1e-6
+    relaxed = analyze_urdf(path, position_tolerance=2e-6)
+    assert relaxed.solver_compatible, relaxed.reason
+    assert relaxed.joint_axis_position_errors[0] < 1e-12
+    assert relaxed.joint_axis_position_errors.max() < 2e-6
+    assert relaxed.joint_axis_angle_errors.max() < 1e-12
+    report = relaxed.to_dict()
+    report["parameters"]["joint_zero"][0] = 1
+    assert relaxed.parameters.joint_zero[0] == 0
+
+
+def test_combined_axis_tilts_exceed_the_canonical_fit_angle_tolerance(tmp_path):
+    robot = ET.parse(URDF).getroot()
+    for index, delta in [(2, 8e-7), (4, -8e-7)]:
+        origin = robot.find(f"joint[@name='joint_{index}']/origin")
+        roll, pitch, yaw = np.fromstring(origin.get("rpy"), sep=" ")
+        origin.set("rpy", f"{roll + delta} {pitch} {yaw}")
+
+    path = _write_robot(tmp_path, robot)
+    analysis = analyze_urdf(path)
+    assert analysis.is_srs
+    assert not analysis.solver_compatible
+    assert "exceeds the angle tolerance" in analysis.reason
+    assert analysis.joint_axis_position_errors.max() < 1e-6
+    assert analysis.joint_axis_angle_errors.max() == pytest.approx(1.6e-6)
+    assert analyze_urdf(path, angle_tolerance=2e-6).solver_compatible

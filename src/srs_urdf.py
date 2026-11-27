@@ -59,10 +59,24 @@ class SRSAnalysis:
     shoulder_axis_error: Optional[float] = None
     wrist_axis_error: Optional[float] = None
     parameters: Optional[SRSParameters] = None
+    joint_axis_position_errors: Optional[np.ndarray] = None
+    joint_axis_angle_errors: Optional[np.ndarray] = None
 
     @property
     def solver_compatible(self):
         return self.parameters is not None
+
+    def to_dict(self) -> dict:
+        """Return a JSON-serializable report with independent data."""
+        report = asdict(
+            self,
+            dict_factory=lambda fields: {
+                name: value.tolist() if isinstance(value, np.ndarray) else value
+                for name, value in fields
+            },
+        )
+        report["solver_compatible"] = self.solver_compatible
+        return report
 
     def make_solver(self) -> SRSAnalyticalSolver:
         """Build a solver whose poses are relative to the selected URDF base."""
@@ -257,14 +271,16 @@ def _canonical_parameters(frames, axes, shoulder, upper, forearm, limits):
     # Compute each offset in the URDF home frame. Upstream rotations
     # transform both directions equally and cancel in their relative angle.
     a1, a2, a3, a4, a5, a6, a7 = axes
+    upper_axis = a3 if a3 @ upper > 0.0 else -a3
+    forearm_axis = a5 if a5 @ forearm > 0.0 else -a5
     zero = np.array(
         [
             0.0,
-            _angle_about(a2, upper, a1, allow_opposite=True),
+            _angle_about(a2, upper_axis, a1, allow_opposite=True),
             _angle_about(a3, a4, -a2, allow_opposite=True),
-            _angle_about(a4, forearm, upper),
+            _angle_about(a4, forearm_axis, upper_axis),
             _angle_about(a5, a6, -a4, allow_opposite=True),
-            _angle_about(a6, a7, forearm, allow_opposite=True),
+            _angle_about(a6, a7, forearm_axis, allow_opposite=True),
             0.0,
         ]
     )
@@ -280,8 +296,8 @@ def _canonical_parameters(frames, axes, shoulder, upper, forearm, limits):
     link_lengths = np.array(
         [
             z @ shoulder,
-            np.linalg.norm(upper),
-            np.linalg.norm(forearm),
+            upper_axis @ upper,
+            forearm_axis @ forearm,
             z @ (tip_pose[:3, 3] - wrist),
         ]
     )
@@ -291,12 +307,21 @@ def _canonical_parameters(frames, axes, shoulder, upper, forearm, limits):
 
     base = np.eye(4)
     base[:3, :3] = np.column_stack((x, y, z))
-    base[:3, 3] = shoulder - z * link_lengths[0]
+    base[:3, 3] = points[0] - z * (z @ points[0])
     flange = base.copy()
     flange[:3, 3] += z * link_lengths.sum()
-    return SRSParameters(
+    params = SRSParameters(
         link_lengths, dh, base, np.linalg.solve(flange, tip_pose), zero, signs, limits
     )
+
+    # A rotary joint is determined by its axis line. Compare the reconstructed
+    # lines at solver zero while the fixed tip transform matches that pose.
+    distances = np.repeat(np.cumsum(link_lengths[:3]), (3, 1, 3))
+    centers = base[:3, 3] + distances[:, None] * z
+    position_errors = np.linalg.norm(np.cross(centers - points, reference_axes), axis=1)
+    sine = np.linalg.norm(np.cross(canonical_axes, reference_axes), axis=1)
+    cosine = np.abs(np.sum(canonical_axes * reference_axes, axis=1))
+    return params, position_errors, np.arctan2(sine, cosine)
 
 
 def analyze_urdf(
@@ -382,9 +407,21 @@ def analyze_urdf(
     ):
         result.reason = "The solver requires the upper arm and forearm along J3 and J5"
     else:
-        result.parameters = _canonical_parameters(
+        params, position_errors, angle_errors = _canonical_parameters(
             frames, axes, shoulder, upper, forearm, _joint_limits(active)
         )
+        result.joint_axis_position_errors = position_errors
+        result.joint_axis_angle_errors = angle_errors
+        worst_position = int(np.argmax(position_errors))
+        worst_angle = int(np.argmax(angle_errors))
+        if position_errors[worst_position] > position_tolerance:
+            name = result.joint_names[worst_position]
+            result.reason = f"Canonical axis of {name!r} exceeds the position tolerance"
+        elif angle_errors[worst_angle] > angle_tolerance:
+            name = result.joint_names[worst_angle]
+            result.reason = f"Canonical axis of {name!r} exceeds the angle tolerance"
+        else:
+            result.parameters = params
     return result
 
 
@@ -413,13 +450,7 @@ def main(argv=None):
     except (OSError, ElementTree.ParseError, ValueError) as exc:
         print(f"{parser.prog}: {exc}", file=sys.stderr)
         return 2
-    report = asdict(result)
-    report["solver_compatible"] = result.solver_compatible
-    print(
-        json.dumps(
-            report, indent=2, default=lambda array: array.tolist(), allow_nan=False
-        )
-    )
+    print(json.dumps(result.to_dict(), indent=2, allow_nan=False))
     return 0 if result.solver_compatible else 1
 
 
