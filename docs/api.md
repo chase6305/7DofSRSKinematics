@@ -140,6 +140,7 @@ returns position and rotation errors with the leading shape of `q_urdf`.
 ```bash
 srs-identify robot.urdf --scan
 srs-identify robot.urdf --scan --base torso --check-fk
+srs-identify robot.urdf --scan --include-rejected
 ```
 
 Scan mode considers windows of seven consecutive independent rotary joints,
@@ -154,3 +155,7 @@ including matches rejected by the solver. Exit status 0 indicates at least one
 compatible match. Status 1 covers both an empty array and matches without
 extractable parameters. In Python, `scan_urdf(path, base_link=None)` returns
 the same matches as a tuple of `SRSAnalysis` objects.
+
+To diagnose an empty scan, add `--include-rejected` or pass
+`include_rejected=True` to the Python API. Each seven-joint window that fails
+the geometric checks then includes its reason and available residuals.

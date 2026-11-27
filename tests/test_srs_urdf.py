@@ -324,6 +324,16 @@ def test_scan_reports_noncanonical_geometry_and_exit_status(tmp_path, capsys):
     assert report["is_srs"]
     assert not report["solver_compatible"]
 
+    robot.find("joint[@name='joint_7']/origin").set("xyz", "0.01 0.081 0.06070")
+    path = _write_robot(tmp_path, robot)
+    assert scan_urdf(path) == ()
+    assert main([str(path), "--scan", "--include-rejected"]) == 1
+    report = json.loads(capsys.readouterr().out)["chains"][0]
+    assert not report["is_srs"]
+    assert report["tip_link"] == "link_ee"
+    assert report["wrist_axis_error"] > 1e-6
+    assert "Wrist axes do not intersect" in report["reason"]
+
 
 def test_cli_can_sample_tool_pose_errors(capsys):
     assert main([str(URDF), "--scan", "--check-fk"]) == 0

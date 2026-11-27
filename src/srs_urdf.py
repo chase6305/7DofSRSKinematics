@@ -616,8 +616,13 @@ def scan_urdf(
     base_link: Optional[str] = None,
     position_tolerance: float = 1e-6,
     angle_tolerance: float = 1e-6,
+    include_rejected: bool = False,
 ) -> Tuple[SRSAnalysis, ...]:
-    """Find geometrically S-R-S chains in a URDF subtree, sorted by base and tip."""
+    """Find S-R-S chains in a URDF subtree, sorted by base and tip.
+
+    Set include_rejected to also report seven-rotary windows that fail the
+    geometric tests and their rejection reasons.
+    """
     _validate_tolerances(position_tolerance, angle_tolerance)
     tree = _URDFTree(urdf_path)
     matches = []
@@ -625,7 +630,7 @@ def scan_urdf(
         result = _analyze_chain(
             tree, base, last_rotary_link, position_tolerance, angle_tolerance
         )
-        if result.is_srs:
+        if result.is_srs or include_rejected:
             matches.extend(
                 _with_fixed_tip(result, tree, tip)
                 for tip in tree.fixed_tips(last_rotary_link)
@@ -665,6 +670,11 @@ def main(argv=None):
         "--scan", action="store_true", help="find S-R-S chains in a subtree"
     )
     parser.add_argument(
+        "--include-rejected",
+        action="store_true",
+        help="include seven-rotary candidates rejected by the geometry checks in a scan",
+    )
+    parser.add_argument(
         "--position-tolerance",
         type=float,
         default=1e-6,
@@ -684,6 +694,8 @@ def main(argv=None):
         help="compare URDF and extracted FK at 32 deterministic joint samples",
     )
     args = parser.parse_args(argv)
+    if args.include_rejected and not args.scan:
+        parser.error("--include-rejected requires --scan")
     options = {
         "base_link": args.base,
         "position_tolerance": args.position_tolerance,
@@ -691,7 +703,9 @@ def main(argv=None):
     }
     try:
         if args.scan:
-            matches = scan_urdf(args.urdf, **options)
+            matches = scan_urdf(
+                args.urdf, include_rejected=args.include_rejected, **options
+            )
             report = {
                 "chains": [_cli_report(match, args.check_fk) for match in matches]
             }
