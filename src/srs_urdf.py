@@ -104,6 +104,37 @@ class SRSAnalysis:
         solver.upper_position_limits = np.maximum(first, last)
         return solver
 
+    def compare_fk(self, q_urdf) -> Tuple[np.ndarray, np.ndarray]:
+        """Compare extracted and direct URDF FK at given URDF joint coordinates.
+
+        Return position errors in metres and rotation angles in radians. Each
+        array has the leading shape of the input (..., 7). This reads the URDF
+        given to analyze_urdf or scan_urdf.
+        """
+        solver = self.make_solver()
+        joints = np.asarray(q_urdf, dtype=float)
+        mapped = self.parameters.to_solver_joints(joints).reshape(-1, 7)
+        tree = _URDFTree(self.urdf_path)
+        chain = tree.chain(tree.base(self.base_link), self.tip_link)
+        active = [joint for joint in chain if joint.get("type") != "fixed"]
+        names = tuple(joint.get("name") for joint in active)
+        if names != self.joint_names or any(
+            not _is_independent_rotary(j) for j in active
+        ):
+            raise ValueError(
+                "Selected URDF joint names or types changed since analysis"
+            )
+        frames = _joint_frames(chain, tree.version)
+
+        reference = np.empty((len(mapped), 4, 4))
+        for index, q in enumerate(joints.reshape(-1, 7)):
+            _, _, reference[index] = _chain_state(frames, q)
+        delta = solver.get_fk(mapped) - reference
+        position = np.linalg.norm(delta[:, :3, 3], axis=1)
+        distance = np.linalg.norm(delta[:, :3, :3], axis=(1, 2))
+        angle = 2.0 * np.arcsin(np.clip(distance / np.sqrt(8.0), 0.0, 1.0))
+        return position.reshape(joints.shape[:-1]), angle.reshape(joints.shape[:-1])
+
 
 def _is_independent_rotary(joint):
     return (
@@ -557,6 +588,24 @@ def scan_urdf(
     return tuple(matches)
 
 
+def _cli_report(analysis, check_fk):
+    report = analysis.to_dict()
+    if check_fk and analysis.solver_compatible:
+        params = analysis.parameters
+        bounds = np.asarray(params.joint_limits, dtype=float)
+        bounds = np.where(np.isnan(bounds), [-np.pi, np.pi], bounds)
+        lower, upper = bounds.T
+        fractions = np.random.default_rng(0).random((32, 7))
+        q = (1.0 - fractions) * lower + fractions * upper
+        position, angle = analysis.compare_fk(q)
+        report["fk_check"] = {
+            "sample_count": len(q),
+            "max_position_error": float(position.max()),
+            "max_angle_error": float(angle.max()),
+        }
+    return report
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("urdf", type=Path, help="path to a URDF XML file")
@@ -584,6 +633,11 @@ def main(argv=None):
         metavar="RADIANS",
         help="angle tolerance for axis geometry and fit (default: %(default)s)",
     )
+    parser.add_argument(
+        "--check-fk",
+        action="store_true",
+        help="compare URDF and extracted FK at 32 deterministic joint samples",
+    )
     args = parser.parse_args(argv)
     options = {
         "base_link": args.base,
@@ -593,11 +647,13 @@ def main(argv=None):
     try:
         if args.scan:
             matches = scan_urdf(args.urdf, **options)
-            report = {"chains": [match.to_dict() for match in matches]}
+            report = {
+                "chains": [_cli_report(match, args.check_fk) for match in matches]
+            }
             compatible = any(match.solver_compatible for match in matches)
         else:
             result = analyze_urdf(args.urdf, tip_link=args.tip, **options)
-            report = result.to_dict()
+            report = _cli_report(result, args.check_fk)
             compatible = result.solver_compatible
         output = json.dumps(report, indent=2, allow_nan=False)
     except (OSError, ElementTree.ParseError, ValueError) as exc:

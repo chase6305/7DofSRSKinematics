@@ -114,11 +114,26 @@ selected URDF base frame. `make_solver()` raises `ValueError` with the analysis
 reason when parameters are unavailable.
 `analysis.to_dict()` produces the same report structure as the CLI.
 
+### Compare extracted and URDF forward kinematics
+
+```bash
+srs-identify robot.urdf --tip tool_link --check-fk
+```
+
+For each compatible chain, `--check-fk` adds an `fk_check` object with the sample
+count, maximum position error in metres, and maximum rotation error in radians.
+It uses 32 deterministic samples over the URDF position bounds, with one turn
+from `-π` to `π` for continuous joints. The errors measure the sampled tip poses
+and the exit status continues to report solver compatibility.
+
+For custom positions, `analysis.compare_fk(q_urdf)` reads the source URDF and
+returns position and rotation errors with the leading shape of `q_urdf`.
+
 ### Discover arms in a larger URDF
 
 ```bash
 srs-identify robot.urdf --scan
-srs-identify robot.urdf --scan --base torso
+srs-identify robot.urdf --scan --base torso --check-fk
 ```
 
 Scan mode considers windows of seven consecutive independent rotary joints,

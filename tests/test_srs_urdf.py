@@ -204,6 +204,14 @@ def test_combined_axis_offsets_are_checked_against_the_canonical_fit(tmp_path):
     report = relaxed.to_dict()
     report["parameters"]["joint_zero"][0] = 1
     assert relaxed.parameters.joint_zero[0] == 0
+    joints = np.random.default_rng(12).uniform(-1, 1, (2, 3, 7))
+    position, rotation = relaxed.compare_fk(joints)
+    assert position.shape == rotation.shape == (2, 3)
+    assert 1e-7 < position.max() < 4e-6
+    assert rotation.max() < 1e-12
+    position, rotation = relaxed.compare_fk(relaxed.parameters.joint_zero)
+    assert position.shape == rotation.shape == ()
+    assert position < 1e-12 and rotation < 1e-12
 
 
 def test_combined_axis_tilts_exceed_the_canonical_fit_angle_tolerance(tmp_path):
@@ -284,6 +292,14 @@ def test_scan_reports_noncanonical_geometry_and_exit_status(tmp_path, capsys):
     report = json.loads(capsys.readouterr().out)["chains"][0]
     assert report["is_srs"]
     assert not report["solver_compatible"]
+
+
+def test_cli_can_sample_tool_pose_errors(capsys):
+    assert main([str(URDF), "--scan", "--check-fk"]) == 0
+    report = json.loads(capsys.readouterr().out)["chains"][0]["fk_check"]
+    assert report["sample_count"] == 32
+    assert report["max_position_error"] < 1e-12
+    assert report["max_angle_error"] < 1e-12
 
 
 def test_extract_quaternion_joint_origins(tmp_path):
