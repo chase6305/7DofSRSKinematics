@@ -3,7 +3,7 @@
 from kuka_iiwa_solver import KUKAiiwa7R800Solver, KUKAiiwaSolver
 from solver import ISolver, Solver
 from srs_analytical_solver import SRSAnalyticalSolver, SRSConfiguration
-from srs_urdf import SRSAnalysis, SRSParameters, analyze_urdf
+from srs_urdf import SRSAnalysis, SRSParameters, analyze_urdf, scan_urdf
 
 __all__ = [
     "ISolver",
@@ -13,6 +13,7 @@ __all__ = [
     "SRSAnalysis",
     "SRSParameters",
     "analyze_urdf",
+    "scan_urdf",
     "KUKAiiwaSolver",
     "KUKAiiwa7R800Solver",
 ]

@@ -12,7 +12,7 @@ import numpy as np
 
 from srs_analytical_solver import SRSAnalyticalSolver
 
-__all__ = ["SRSAnalysis", "SRSParameters", "analyze_urdf"]
+__all__ = ["SRSAnalysis", "SRSParameters", "analyze_urdf", "scan_urdf"]
 
 
 @dataclass
@@ -99,70 +99,122 @@ class SRSAnalysis:
         return solver
 
 
-def _select_chain(robot, base_link, tip_link):
-    links = [link.get("name") for link in robot.findall("link")]
-    if not links or None in links or "" in links or len(set(links)) != len(links):
-        raise ValueError("URDF must contain uniquely named links")
+def _is_independent_rotary(joint):
+    return (
+        joint.get("type") in ("revolute", "continuous") and joint.find("mimic") is None
+    )
 
-    children = {link: [] for link in links}
-    parents = {}
-    names = set()
-    for joint in robot.findall("joint"):
-        name = joint.get("name")
-        parent = joint.find("parent")
-        child = joint.find("child")
-        parent = parent.get("link") if parent is not None else None
-        child = child.get("link") if child is not None else None
-        if not name or name in names:
-            raise ValueError("URDF must contain uniquely named joints")
-        if parent not in children or child not in children or child in parents:
-            raise ValueError(f"Invalid parent or child link on joint {name!r}")
-        names.add(name)
-        parents[child] = (parent, joint)
-        children[parent].append(child)
 
-    roots = set(links) - parents.keys()
-    if len(roots) != 1:
-        raise ValueError("URDF must have one root link")
-    root = next(iter(roots))
-    if base_link is None:
-        base_link = root
-    if base_link not in children:
-        raise ValueError(f"Unknown base link {base_link!r}")
+class _URDFTree:
+    def __init__(self, urdf_path):
+        robot = ElementTree.parse(urdf_path).getroot()
+        if robot.tag != "robot":
+            raise ValueError("Expected a URDF <robot> document")
+        links = [link.get("name") for link in robot.findall("link")]
+        if not links or not all(links) or len(set(links)) != len(links):
+            raise ValueError("URDF must contain uniquely named links")
 
-    # Traverse the URDF tree independently of the order of its XML elements.
-    stack = [root]
-    visited = set()
-    while stack:
-        link = stack.pop()
-        visited.add(link)
-        stack.extend(children[link])
-    if len(visited) != len(links):
-        raise ValueError("URDF links must form a connected tree")
+        self.children = {link: [] for link in links}
+        self.parents = {}
+        names = set()
+        for joint in robot.findall("joint"):
+            name = joint.get("name")
+            parent = joint.find("parent")
+            child = joint.find("child")
+            parent = parent.get("link") if parent is not None else None
+            child = child.get("link") if child is not None else None
+            if not name or name in names:
+                raise ValueError("URDF must contain uniquely named joints")
+            if (
+                parent not in self.children
+                or child not in self.children
+                or child in self.parents
+            ):
+                raise ValueError(f"Invalid parent or child link on joint {name!r}")
+            names.add(name)
+            self.parents[child] = (parent, joint)
+            self.children[parent].append(child)
 
-    if tip_link is None:
-        stack = [base_link]
+        roots = set(links) - self.parents.keys()
+        if len(roots) != 1:
+            raise ValueError("URDF must have one root link")
+        self.root = next(iter(roots))
+
+        stack = [self.root]
+        visited = 0
+        while stack:
+            link = stack.pop()
+            visited += 1
+            stack.extend(self.children[link])
+        if visited != len(links):
+            raise ValueError("URDF links must form a connected tree")
+
+    def base(self, link):
+        if link is None:
+            return self.root
+        if link not in self.children:
+            raise ValueError(f"Unknown base link {link!r}")
+        return link
+
+    def sole_leaf(self, base):
+        stack = [base]
         leaves = []
         while stack:
             link = stack.pop()
-            if children[link]:
-                stack.extend(children[link])
+            if self.children[link]:
+                stack.extend(self.children[link])
             else:
                 leaves.append(link)
         if len(leaves) != 1:
-            raise ValueError("Multiple leaf links below the base; specify a tip link")
-        tip_link = leaves[0]
-    if tip_link not in children:
-        raise ValueError(f"Unknown tip link {tip_link!r}")
+            raise ValueError("Multiple leaf links below the base; use --tip or --scan")
+        return leaves[0]
 
-    chain = []
-    link = tip_link
-    while link != base_link:
-        if link == root:
-            raise ValueError(f"Tip link {tip_link!r} is outside base {base_link!r}")
-        link, joint = parents[link]
-        chain.append(joint)
-    return base_link, tip_link, chain[::-1]
+    def chain(self, base, tip):
+        if tip not in self.children:
+            raise ValueError(f"Unknown tip link {tip!r}")
+        chain = []
+        link = tip
+        while link != base:
+            if link == self.root:
+                raise ValueError(f"Tip link {tip!r} is outside base {base!r}")
+            link, joint = self.parents[link]
+            chain.append(joint)
+        return chain[::-1]
+
+    def _fixed_tips(self, link):
+        stack = [link]
+        while stack:
+            current = stack.pop()
+            children = self.children[current]
+            fixed = [
+                child
+                for child in children
+                if self.parents[child][1].get("type") == "fixed"
+            ]
+            if not children or len(fixed) < len(children):
+                yield current
+            stack.extend(fixed)
+
+    def rotary_paths(self, base):
+        # Track the base of each of the last seven contiguous rotary joints.
+        # The start of a fixed segment is immediately below the previous joint.
+        stack = [(base, base, ())]
+        while stack:
+            parent, segment_base, recent = stack.pop()
+            for child in self.children[parent]:
+                joint = self.parents[child][1]
+                if joint.get("type") == "fixed":
+                    stack.append((child, segment_base, recent))
+                    continue
+                rotary_bases = (
+                    (*recent[-6:], segment_base)
+                    if _is_independent_rotary(joint)
+                    else ()
+                )
+                if len(rotary_bases) == 7:
+                    for tip in self._fixed_tips(child):
+                        yield rotary_bases[0], tip
+                stack.append((child, child, rotary_bases))
 
 
 def _vector(element, attribute, default, joint_name):
@@ -324,38 +376,19 @@ def _canonical_parameters(frames, axes, shoulder, upper, forearm, limits):
     return params, position_errors, np.arctan2(sine, cosine)
 
 
-def analyze_urdf(
-    urdf_path: Union[str, Path],
-    *,
-    base_link: Optional[str] = None,
-    tip_link: Optional[str] = None,
-    position_tolerance: float = 1e-6,
-    angle_tolerance: float = 1e-6,
-) -> SRSAnalysis:
-    """Analyze the root-to-tip path, using the sole leaf when the tip is omitted.
-
-    The tolerances are in metres and radians. Joint axes and S/E/W centers
-    are evaluated at URDF joint zero. Invalid input raises an exception;
-    geometric rejection is recorded in the returned analysis.
-    """
+def _validate_tolerances(position_tolerance, angle_tolerance):
     if not np.isfinite(position_tolerance) or position_tolerance <= 0.0:
         raise ValueError("position_tolerance must be positive and finite")
     if not 0.0 < angle_tolerance < np.pi / 4.0:
         raise ValueError("angle_tolerance must be between 0 and pi/4 radians")
 
-    robot = ElementTree.parse(urdf_path).getroot()
-    if robot.tag != "robot":
-        raise ValueError("Expected a URDF <robot> document")
-    base, tip, chain = _select_chain(robot, base_link, tip_link)
+
+def _analyze_chain(path, base, tip, chain, position_tolerance, angle_tolerance):
     active = [joint for joint in chain if joint.get("type") != "fixed"]
     result = SRSAnalysis(
-        str(urdf_path), base, tip, tuple(joint.get("name") for joint in active)
+        str(path), base, tip, tuple(joint.get("name") for joint in active)
     )
-    if len(active) != 7 or any(
-        joint.get("type") not in ("revolute", "continuous")
-        or joint.find("mimic") is not None
-        for joint in active
-    ):
+    if len(active) != 7 or any(not _is_independent_rotary(joint) for joint in active):
         result.reason = "Expected seven independent rotary joints on the selected path"
         return result
 
@@ -425,12 +458,66 @@ def analyze_urdf(
     return result
 
 
+def analyze_urdf(
+    urdf_path: Union[str, Path],
+    *,
+    base_link: Optional[str] = None,
+    tip_link: Optional[str] = None,
+    position_tolerance: float = 1e-6,
+    angle_tolerance: float = 1e-6,
+) -> SRSAnalysis:
+    """Analyze the root-to-tip path, using the sole leaf when the tip is omitted.
+
+    The tolerances are in metres and radians. Joint axes and S/E/W centers
+    are evaluated at URDF joint zero. Invalid input raises an exception;
+    geometric rejection is recorded in the returned analysis.
+    """
+    _validate_tolerances(position_tolerance, angle_tolerance)
+    tree = _URDFTree(urdf_path)
+    base = tree.base(base_link)
+    tip = tree.sole_leaf(base) if tip_link is None else tip_link
+    return _analyze_chain(
+        urdf_path, base, tip, tree.chain(base, tip), position_tolerance, angle_tolerance
+    )
+
+
+def scan_urdf(
+    urdf_path: Union[str, Path],
+    *,
+    base_link: Optional[str] = None,
+    position_tolerance: float = 1e-6,
+    angle_tolerance: float = 1e-6,
+) -> Tuple[SRSAnalysis, ...]:
+    """Find geometrically S-R-S chains in a URDF subtree, sorted by base and tip."""
+    _validate_tolerances(position_tolerance, angle_tolerance)
+    tree = _URDFTree(urdf_path)
+    matches = []
+    for base, tip in sorted(tree.rotary_paths(tree.base(base_link))):
+        result = _analyze_chain(
+            urdf_path,
+            base,
+            tip,
+            tree.chain(base, tip),
+            position_tolerance,
+            angle_tolerance,
+        )
+        if result.is_srs:
+            matches.append(result)
+    return tuple(matches)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("urdf", type=Path)
-    parser.add_argument("--base", help="base link (defaults to the URDF root)")
     parser.add_argument(
+        "--base", help="base link or scan root (defaults to the URDF root)"
+    )
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument(
         "--tip", help="tip link (defaults to the only leaf below the base)"
+    )
+    selection.add_argument(
+        "--scan", action="store_true", help="find S-R-S chains in a subtree"
     )
     parser.add_argument(
         "--position-tolerance", type=float, default=1e-6, metavar="METRES"
@@ -439,19 +526,25 @@ def main(argv=None):
         "--angle-tolerance", type=float, default=1e-6, metavar="RADIANS"
     )
     args = parser.parse_args(argv)
+    options = {
+        "base_link": args.base,
+        "position_tolerance": args.position_tolerance,
+        "angle_tolerance": args.angle_tolerance,
+    }
     try:
-        result = analyze_urdf(
-            args.urdf,
-            base_link=args.base,
-            tip_link=args.tip,
-            position_tolerance=args.position_tolerance,
-            angle_tolerance=args.angle_tolerance,
-        )
+        if args.scan:
+            matches = scan_urdf(args.urdf, **options)
+            report = {"chains": [match.to_dict() for match in matches]}
+            compatible = any(match.solver_compatible for match in matches)
+        else:
+            result = analyze_urdf(args.urdf, tip_link=args.tip, **options)
+            report = result.to_dict()
+            compatible = result.solver_compatible
     except (OSError, ElementTree.ParseError, ValueError) as exc:
         print(f"{parser.prog}: {exc}", file=sys.stderr)
         return 2
-    print(json.dumps(result.to_dict(), indent=2, allow_nan=False))
-    return 0 if result.solver_compatible else 1
+    print(json.dumps(report, indent=2, allow_nan=False))
+    return 0 if compatible else 1
 
 
 if __name__ == "__main__":

@@ -63,7 +63,7 @@ if ok:
 srs-identify urdf/iiwa_7.urdf --tip link_ee
 ```
 
-命令输出 JSON，包含几何识别结果、肩肘腕中心及轴线交汇误差。对现有解析求解器支持的模型，还会提取 DH 参数、限位、关节零位与方向映射、基座及工具变换。通过 `--base` 和 `--tip` 可以选择分支 URDF 中的一条链。[Python 接口和 JSON 字段 →](docs/api.md#s-r-s-recognition-from-urdf)
+命令输出 JSON，包含几何识别结果、肩肘腕中心及轴线交汇误差。对现有解析求解器支持的模型，还会提取 DH 参数、限位、关节零位与方向映射、基座及工具变换。可以用 `--base` 和 `--tip` 指定一条链，也可以用 `--scan` 从整机 URDF 中发现机械臂。[Python 接口和 JSON 字段 →](docs/api.md#s-r-s-recognition-from-urdf)
 
 ## 文档与验证
 

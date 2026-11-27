@@ -64,7 +64,7 @@ feasible intervals. [Batch APIs and numerical conventions →](docs/api.md)
 srs-identify urdf/iiwa_7.urdf --tip link_ee
 ```
 
-The JSON report includes the geometry classification, shoulder, elbow and wrist centers, and axis intersection errors. For compatible chains it also includes DH parameters, joint limits, joint zero and sign mappings, and base and tool transforms. Use `--base` and `--tip` to select a chain in a branched URDF. [Python API and JSON fields →](docs/api.md#s-r-s-recognition-from-urdf)
+The JSON report includes the geometry classification, shoulder, elbow and wrist centers, and axis intersection errors. For compatible chains it also includes DH parameters, joint limits, joint zero and sign mappings, and base and tool transforms. Use `--base` and `--tip` to select a chain, or use `--scan` to discover arms in a larger URDF. [Python API and JSON fields →](docs/api.md#s-r-s-recognition-from-urdf)
 
 ## Documentation and validation
 

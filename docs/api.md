@@ -107,3 +107,23 @@ coordinates with FK, IK and branch APIs. FK returns the selected tip pose in the
 selected URDF base frame. `make_solver()` raises `ValueError` with the analysis
 reason when parameters are unavailable.
 `analysis.to_dict()` produces the same report structure as the CLI.
+
+### Discover arms in a larger URDF
+
+```bash
+srs-identify robot.urdf --scan
+srs-identify robot.urdf --scan --base torso
+```
+
+Scan mode considers windows of seven consecutive independent rotary joints,
+allowing fixed joints between them. Each result starts at the beginning of the
+fixed segment that mounts J1. Tips follow fixed attachments down to leaf links
+or links that mount another movable joint, such as a gripper. Results are sorted
+by base and tip, so multiple fixed tool frames can produce several results for
+the same seven joints.
+
+The JSON object has a `chains` array containing all geometric S-R-S matches,
+including matches rejected by the solver. Exit status 0 indicates at least one
+compatible match. Status 1 covers both an empty array and matches without
+extractable parameters. In Python, `scan_urdf(path, base_link=None)` returns
+the same matches as a tuple of `SRSAnalysis` objects.

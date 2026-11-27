@@ -5,7 +5,7 @@ from xml.etree import ElementTree as ET
 import numpy as np
 import pytest
 
-from srs_kinematics import KUKAiiwaSolver, analyze_urdf
+from srs_kinematics import KUKAiiwaSolver, analyze_urdf, scan_urdf
 from srs_urdf import main
 
 URDF = Path(__file__).resolve().parents[1] / "urdf" / "iiwa_7.urdf"
@@ -220,3 +220,66 @@ def test_combined_axis_tilts_exceed_the_canonical_fit_angle_tolerance(tmp_path):
     assert analysis.joint_axis_position_errors.max() < 1e-6
     assert analysis.joint_axis_angle_errors.max() == pytest.approx(1.6e-6)
     assert analyze_urdf(path, angle_tolerance=2e-6).solver_compatible
+
+
+def test_scan_finds_both_arms_below_movable_mounts_and_skips_gripper_joints(tmp_path):
+    robot = ET.Element("robot", name="dual_arm")
+    for link in ("world", "lift", "carriage", "left_camera", "left_finger"):
+        ET.SubElement(robot, "link", name=link)
+    for name, kind, parent, child in [
+        ("slide", "prismatic", "world", "lift"),
+        ("yaw", "revolute", "lift", "carriage"),
+        ("grip", "prismatic", "left_link_ee", "left_finger"),
+    ]:
+        joint = _fixed_joint(robot, name, parent, child)
+        joint.set("type", kind)
+        ET.SubElement(joint, "axis", xyz="0 0 1")
+        ET.SubElement(joint, "limit", lower="-1", upper="1", effort="1", velocity="1")
+
+    for side, x in [("right", -0.3), ("left", 0.3)]:
+        arm = ET.parse(URDF).getroot()
+        for link in arm.findall("link"):
+            ET.SubElement(robot, "link", name=f"{side}_{link.get('name')}")
+        for joint in arm.findall("joint"):
+            joint.set("name", f"{side}_{joint.get('name')}")
+            for tag in ("parent", "child"):
+                element = joint.find(tag)
+                element.set("link", f"{side}_{element.get('link')}")
+            robot.append(joint)
+        _fixed_joint(robot, f"{side}_mount", "carriage", f"{side}_link_0", f"{x} 0 0")
+    _fixed_joint(robot, "wrist_camera", "left_link_7", "left_camera")
+
+    path = _write_robot(tmp_path, robot)
+    matches = scan_urdf(path)
+    assert [(r.base_link, r.tip_link) for r in matches] == [
+        ("carriage", "left_camera"),
+        ("carriage", "left_link_ee"),
+        ("carriage", "right_link_ee"),
+    ]
+    assert all(r.solver_compatible for r in matches)
+    assert matches[1].joint_names == tuple(f"left_joint_{i}" for i in range(1, 8))
+    q = np.array([0.1, -0.2, 0.3, 0.4, -0.5, 0.6, -0.7])
+    left = matches[1]
+    actual = left.make_solver().get_fk(left.parameters.to_solver_joints(q))
+    expected = _yaw_pose(0, [0.3, 0, 0]) @ KUKAiiwaSolver().get_fk(q)
+    np.testing.assert_allclose(actual, expected, atol=1e-12, rtol=0)
+
+    matches = scan_urdf(path, base_link="left_link_0")
+    assert [(r.base_link, r.tip_link) for r in matches] == [
+        ("left_link_0", "left_camera"),
+        ("left_link_0", "left_link_ee"),
+    ]
+
+
+def test_scan_reports_noncanonical_geometry_and_exit_status(tmp_path, capsys):
+    assert main([str(URDF), "--scan"]) == 0
+    assert json.loads(capsys.readouterr().out)["chains"][0]["tip_link"] == "link_ee"
+    assert main([str(URDF), "--scan", "--base", "link_1"]) == 1
+    assert json.loads(capsys.readouterr().out) == {"chains": []}
+
+    robot = ET.parse(URDF).getroot()
+    robot.find("joint[@name='joint_2']/axis").set("xyz", "0 0.2 1")
+    assert main([str(_write_robot(tmp_path, robot)), "--scan"]) == 1
+    report = json.loads(capsys.readouterr().out)["chains"][0]
+    assert report["is_srs"]
+    assert not report["solver_compatible"]
