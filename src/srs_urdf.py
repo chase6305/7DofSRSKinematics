@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -110,6 +111,12 @@ class _URDFTree:
         robot = ElementTree.parse(urdf_path).getroot()
         if robot.tag != "robot":
             raise ValueError("Expected a URDF <robot> document")
+        version = robot.get("version", "1.0")
+        if re.fullmatch(r"[0-9]+\.[0-9]+", version) is None:
+            raise ValueError(f"Invalid URDF version {version!r}")
+        self.version = tuple(map(int, version.split(".")))
+        if self.version not in ((1, 0), (1, 1), (1, 2)):
+            raise ValueError(f"Unsupported URDF version {version!r}")
         links = [link.get("name") for link in robot.findall("link")]
         if not links or not all(links) or len(set(links)) != len(links):
             raise ValueError("URDF must contain uniquely named links")
@@ -217,41 +224,61 @@ class _URDFTree:
                 stack.append((child, child, rotary_bases))
 
 
-def _vector(element, attribute, default, joint_name):
+def _vector(element, attribute, default, joint_name, size=3):
     value = element.get(attribute, default) if element is not None else default
     try:
         vector = np.array(value.split(), dtype=float)
     except ValueError:
         raise ValueError(f"Invalid {attribute} on joint {joint_name!r}") from None
-    if vector.shape != (3,) or not np.all(np.isfinite(vector)):
+    if vector.shape != (size,) or not np.all(np.isfinite(vector)):
         raise ValueError(f"Invalid {attribute} on joint {joint_name!r}")
     return vector
 
 
-def _joint_frames(chain):
+def _unit_vector(vector, description):
+    scale = np.max(np.abs(vector))
+    if scale == 0.0:
+        raise ValueError(f"Zero {description}")
+    scaled = vector / scale
+    return scaled / np.linalg.norm(scaled)
+
+
+def _origin_rotation(origin, name, version):
+    if origin is not None and "quat_xyzw" in origin.attrib:
+        if version < (1, 1):
+            raise ValueError(
+                f"quat_xyzw on joint {name!r} requires URDF version 1.1 or newer"
+            )
+        if "rpy" in origin.attrib:
+            raise ValueError(f"Joint {name!r} has both rpy and quat_xyzw orientations")
+        q = _vector(origin, "quat_xyzw", "0 0 0 1", name, size=4)
+        q = _unit_vector(q, f"quat_xyzw on joint {name!r}")
+        cross = SRSAnalyticalSolver.skew(q[:3])
+        return np.eye(3) + 2.0 * (q[3] * cross + cross @ cross)
+
+    roll, pitch, yaw = _vector(origin, "rpy", "0 0 0", name)
+    cr, cp, cy = np.cos([roll, pitch, yaw])
+    sr, sp, sy = np.sin([roll, pitch, yaw])
+    # URDF fixed-axis roll, pitch, yaw gives Rz(yaw) Ry(pitch) Rx(roll).
+    return [
+        [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+        [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+        [-sp, cp * sr, cp * cr],
+    ]
+
+
+def _joint_frames(chain, version):
     frames = []
     for joint in chain:
         name = joint.get("name")
         origin = joint.find("origin")
-        roll, pitch, yaw = _vector(origin, "rpy", "0 0 0", name)
-        cr, cp, cy = np.cos([roll, pitch, yaw])
-        sr, sp, sy = np.sin([roll, pitch, yaw])
         transform = np.eye(4)
-        # URDF fixed-axis roll, pitch, yaw gives Rz(yaw) Ry(pitch) Rx(roll).
-        transform[:3, :3] = [
-            [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
-            [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
-            [-sp, cp * sr, cp * cr],
-        ]
+        transform[:3, :3] = _origin_rotation(origin, name, version)
         transform[:3, 3] = _vector(origin, "xyz", "0 0 0", name)
         axis = None
         if joint.get("type") != "fixed":
             axis = _vector(joint.find("axis"), "xyz", "1 0 0", name)
-            scale = np.max(np.abs(axis))
-            if scale == 0.0:
-                raise ValueError(f"Zero rotation axis on joint {name!r}")
-            axis /= scale
-            axis /= np.linalg.norm(axis)
+            axis = _unit_vector(axis, f"rotation axis on joint {name!r}")
         frames.append((transform, axis))
     return frames
 
@@ -289,7 +316,7 @@ def _axis_center(points, axes):
     return points[0] + offset, float(distances.max())
 
 
-def _joint_limits(joints):
+def _joint_limits(joints, version):
     limits = []
     for joint in joints:
         if joint.get("type") == "continuous":
@@ -299,6 +326,8 @@ def _joint_limits(joints):
         limit = joint.find("limit")
         if limit is None:
             raise ValueError(f"Missing position limits on revolute joint {name!r}")
+        if version >= (1, 2) and not {"lower", "upper"} <= limit.attrib.keys():
+            raise ValueError(f"Missing lower or upper limit on revolute joint {name!r}")
         try:
             lower, upper = (float(limit.get(key, "0")) for key in ("lower", "upper"))
         except ValueError:
@@ -383,7 +412,9 @@ def _validate_tolerances(position_tolerance, angle_tolerance):
         raise ValueError("angle_tolerance must be between 0 and pi/4 radians")
 
 
-def _analyze_chain(path, base, tip, chain, position_tolerance, angle_tolerance):
+def _analyze_chain(
+    path, base, tip, chain, version, position_tolerance, angle_tolerance
+):
     active = [joint for joint in chain if joint.get("type") != "fixed"]
     result = SRSAnalysis(
         str(path), base, tip, tuple(joint.get("name") for joint in active)
@@ -392,7 +423,7 @@ def _analyze_chain(path, base, tip, chain, position_tolerance, angle_tolerance):
         result.reason = "Expected seven independent rotary joints on the selected path"
         return result
 
-    frames = _joint_frames(chain)
+    frames = _joint_frames(chain, version)
     points, axes, _ = _chain_state(frames, np.zeros(7))
     result.shoulder_center, result.shoulder_axis_error = _axis_center(
         points[:3], axes[:3]
@@ -441,7 +472,7 @@ def _analyze_chain(path, base, tip, chain, position_tolerance, angle_tolerance):
         result.reason = "The solver requires the upper arm and forearm along J3 and J5"
     else:
         params, position_errors, angle_errors = _canonical_parameters(
-            frames, axes, shoulder, upper, forearm, _joint_limits(active)
+            frames, axes, shoulder, upper, forearm, _joint_limits(active, version)
         )
         result.joint_axis_position_errors = position_errors
         result.joint_axis_angle_errors = angle_errors
@@ -477,7 +508,13 @@ def analyze_urdf(
     base = tree.base(base_link)
     tip = tree.sole_leaf(base) if tip_link is None else tip_link
     return _analyze_chain(
-        urdf_path, base, tip, tree.chain(base, tip), position_tolerance, angle_tolerance
+        urdf_path,
+        base,
+        tip,
+        tree.chain(base, tip),
+        tree.version,
+        position_tolerance,
+        angle_tolerance,
     )
 
 
@@ -498,6 +535,7 @@ def scan_urdf(
             base,
             tip,
             tree.chain(base, tip),
+            tree.version,
             position_tolerance,
             angle_tolerance,
         )

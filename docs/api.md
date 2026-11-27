@@ -62,6 +62,11 @@ URDF XML with fixed joints, independent revolute joints and continuous joints on
 the selected path. It uses joint origins and axes, so mesh files are optional.
 `--position-tolerance` and `--angle-tolerance` default to `1e-6` metres and radians.
 
+Joint origins accept `rpy` for URDF 1.0 through 1.2, or `quat_xyzw` for
+URDF 1.1 and 1.2. A joint origin must specify at most one rotation representation.
+URDF 1.2 requires explicit lower and upper bounds on revolute joints.
+[URDF version reference](https://github.com/ros/urdfdom/tree/rolling#urdf-specification)
+
 The report sets `is_srs` when the seven rotary joints form two groups of three
 intersecting, nondegenerate axes with a rotary elbow between them. Shoulder and
 wrist errors are the maximum distances from their least-squares centers to the

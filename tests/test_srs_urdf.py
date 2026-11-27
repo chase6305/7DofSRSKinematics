@@ -283,3 +283,75 @@ def test_scan_reports_noncanonical_geometry_and_exit_status(tmp_path, capsys):
     report = json.loads(capsys.readouterr().out)["chains"][0]
     assert report["is_srs"]
     assert not report["solver_compatible"]
+
+
+def test_extract_quaternion_joint_origins(tmp_path):
+    robot = ET.parse(URDF).getroot()
+    robot.set("version", "1.1")
+    for joint in robot.findall("joint"):
+        origin = joint.find("origin")
+        angles = np.fromstring(origin.attrib.pop("rpy"), sep=" ") / 2.0
+        sr, sp, sy = np.sin(angles)
+        cr, cp, cy = np.cos(angles)
+        quaternion = np.array(
+            [
+                sr * cp * cy - cr * sp * sy,
+                cr * sp * cy + sr * cp * sy,
+                cr * cp * sy - sr * sp * cy,
+                cr * cp * cy + sr * sp * sy,
+            ]
+        )
+        origin.set("quat_xyzw", " ".join(map(str, -3 * quaternion)))
+
+    analysis = analyze_urdf(_write_robot(tmp_path, robot))
+    assert analysis.solver_compatible, analysis.reason
+    params = analysis.parameters
+    q = np.random.default_rng(19).uniform(-1, 1, (20, 7))
+    np.testing.assert_allclose(
+        analysis.make_solver().get_fk(params.to_solver_joints(q)),
+        KUKAiiwaSolver().get_fk(q),
+        atol=1e-12,
+        rtol=0,
+    )
+
+
+@pytest.mark.parametrize(
+    "version, quaternion, include_rpy, reason",
+    [
+        ("1.0", "0 0 0 1", False, "requires URDF version 1.1"),
+        ("1.1", "0 0 0 1", True, "both rpy and quat_xyzw"),
+        ("1.1", "0 0 0 0", False, "Zero quat_xyzw"),
+        ("1.1", "0 0 nan 1", False, "Invalid quat_xyzw"),
+        ("1.1", "0 0 1", False, "Invalid quat_xyzw"),
+    ],
+)
+def test_reject_invalid_quaternion_origin(
+    tmp_path, version, quaternion, include_rpy, reason
+):
+    robot = ET.parse(URDF).getroot()
+    robot.set("version", version)
+    origin = robot.find("joint[@name='joint_2']/origin")
+    origin.set("quat_xyzw", quaternion)
+    if not include_rpy:
+        del origin.attrib["rpy"]
+    with pytest.raises(ValueError, match=reason):
+        analyze_urdf(_write_robot(tmp_path, robot))
+
+
+def test_urdf_12_requires_both_revolute_position_limits(tmp_path):
+    robot = ET.parse(URDF).getroot()
+    limit = robot.find("joint[@name='joint_2']/limit")
+    limit.attrib.pop("lower")
+    path = _write_robot(tmp_path, robot)
+    legacy = analyze_urdf(path)
+    assert legacy.parameters.joint_limits[1][0] == 0.0
+
+    robot.set("version", "1.2")
+    with pytest.raises(ValueError, match="Missing lower or upper limit"):
+        scan_urdf(_write_robot(tmp_path, robot))
+    limit.set("lower", "-1.0")
+    limit.attrib.pop("effort")
+    limit.attrib.pop("velocity")
+    modern = analyze_urdf(_write_robot(tmp_path, robot))
+    assert modern.solver_compatible
+    assert modern.parameters.joint_limits[1][0] == -1.0
