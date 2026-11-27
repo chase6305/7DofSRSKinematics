@@ -76,6 +76,11 @@ class SRSAnalysis:
                 for name, value in fields
             },
         )
+        report["joint_names"] = list(self.joint_names)
+        if self.parameters is not None:
+            report["parameters"]["joint_limits"] = [
+                list(bounds) for bounds in self.parameters.joint_limits
+            ]
         report["solver_compatible"] = self.solver_compatible
         return report
 
@@ -108,6 +113,7 @@ def _is_independent_rotary(joint):
 
 class _URDFTree:
     def __init__(self, urdf_path):
+        self.path = str(urdf_path)
         robot = ElementTree.parse(urdf_path).getroot()
         if robot.tag != "robot":
             raise ValueError("Expected a URDF <robot> document")
@@ -277,7 +283,10 @@ def _joint_frames(chain, version):
         transform[:3, 3] = _vector(origin, "xyz", "0 0 0", name)
         axis = None
         if joint.get("type") != "fixed":
-            axis = _vector(joint.find("axis"), "xyz", "1 0 0", name)
+            axis_element = joint.find("axis")
+            if axis_element is not None and "xyz" not in axis_element.attrib:
+                raise ValueError(f"Missing xyz in axis of joint {name!r}")
+            axis = _vector(axis_element, "xyz", "1 0 0", name)
             axis = _unit_vector(axis, f"rotation axis on joint {name!r}")
         frames.append((transform, axis))
     return frames
@@ -412,40 +421,61 @@ def _validate_tolerances(position_tolerance, angle_tolerance):
         raise ValueError("angle_tolerance must be between 0 and pi/4 radians")
 
 
-def _analyze_chain(
-    path, base, tip, chain, version, position_tolerance, angle_tolerance
-):
+def _analyze_chain(tree, base, tip, position_tolerance, angle_tolerance):
+    chain = tree.chain(base, tip)
     active = [joint for joint in chain if joint.get("type") != "fixed"]
     result = SRSAnalysis(
-        str(path), base, tip, tuple(joint.get("name") for joint in active)
+        tree.path, base, tip, tuple(joint.get("name") for joint in active)
     )
-    if len(active) != 7 or any(not _is_independent_rotary(joint) for joint in active):
-        result.reason = "Expected seven independent rotary joints on the selected path"
+    if len(active) != 7:
+        result.reason = f"Expected seven independent rotary joints, found {len(active)} movable joints"
         return result
-
-    frames = _joint_frames(chain, version)
-    points, axes, _ = _chain_state(frames, np.zeros(7))
-    result.shoulder_center, result.shoulder_axis_error = _axis_center(
-        points[:3], axes[:3]
-    )
-    result.wrist_center, result.wrist_axis_error = _axis_center(points[4:], axes[4:])
-    angular_threshold = np.sin(angle_tolerance)
-    pairs = np.array([0, 1, 4, 5])
-    for name, error, triplet in (
-        ("Shoulder", result.shoulder_axis_error, axes[:3]),
-        ("Wrist", result.wrist_axis_error, axes[4:]),
-    ):
-        if error > position_tolerance:
+    for joint in active:
+        if not _is_independent_rotary(joint):
+            name = joint.get("name")
+            kind = "mimic" if joint.find("mimic") is not None else joint.get("type")
             result.reason = (
-                f"{name} axes do not intersect within the position tolerance"
+                f"Expected seven independent rotary joints, found {kind} joint {name!r}"
             )
             return result
+
+    try:
+        with np.errstate(over="raise", invalid="raise"):
+            frames = _joint_frames(chain, tree.version)
+            limits = _joint_limits(active, tree.version)
+            _fit_geometry(result, frames, limits, position_tolerance, angle_tolerance)
+    except (FloatingPointError, np.linalg.LinAlgError) as exc:
+        raise ValueError(
+            f"Could not compute finite joint geometry from {base!r} to {tip!r}"
+        ) from exc
+    return result
+
+
+def _fit_geometry(result, frames, limits, position_tolerance, angle_tolerance):
+    points, axes, _ = _chain_state(frames, np.zeros(7))
+    angular_threshold = np.sin(angle_tolerance)
+    pairs = np.array([0, 1, 4, 5])
+    for name, triplet in (
+        ("Shoulder", axes[:3]),
+        ("Wrist", axes[4:]),
+    ):
         if np.any(
             np.linalg.norm(np.cross(triplet[:-1], triplet[1:]), axis=1)
             <= angular_threshold
         ):
             result.reason = f"{name} has parallel adjacent axes"
-            return result
+            return
+
+    result.shoulder_center, result.shoulder_axis_error = _axis_center(
+        points[:3], axes[:3]
+    )
+    result.wrist_center, result.wrist_axis_error = _axis_center(points[4:], axes[4:])
+    if result.shoulder_axis_error > position_tolerance:
+        result.reason = "Shoulder axes do not intersect within the position tolerance"
+        return
+    if result.wrist_axis_error > position_tolerance:
+        result.reason = "Wrist axes do not intersect within the position tolerance"
+        return
 
     result.is_srs = True
     shoulder, wrist, elbow_axis = result.shoulder_center, result.wrist_center, axes[3]
@@ -472,7 +502,7 @@ def _analyze_chain(
         result.reason = "The solver requires the upper arm and forearm along J3 and J5"
     else:
         params, position_errors, angle_errors = _canonical_parameters(
-            frames, axes, shoulder, upper, forearm, _joint_limits(active, version)
+            frames, axes, shoulder, upper, forearm, limits
         )
         result.joint_axis_position_errors = position_errors
         result.joint_axis_angle_errors = angle_errors
@@ -486,7 +516,6 @@ def _analyze_chain(
             result.reason = f"Canonical axis of {name!r} exceeds the angle tolerance"
         else:
             result.parameters = params
-    return result
 
 
 def analyze_urdf(
@@ -507,15 +536,7 @@ def analyze_urdf(
     tree = _URDFTree(urdf_path)
     base = tree.base(base_link)
     tip = tree.sole_leaf(base) if tip_link is None else tip_link
-    return _analyze_chain(
-        urdf_path,
-        base,
-        tip,
-        tree.chain(base, tip),
-        tree.version,
-        position_tolerance,
-        angle_tolerance,
-    )
+    return _analyze_chain(tree, base, tip, position_tolerance, angle_tolerance)
 
 
 def scan_urdf(
@@ -530,15 +551,7 @@ def scan_urdf(
     tree = _URDFTree(urdf_path)
     matches = []
     for base, tip in sorted(tree.rotary_paths(tree.base(base_link))):
-        result = _analyze_chain(
-            urdf_path,
-            base,
-            tip,
-            tree.chain(base, tip),
-            tree.version,
-            position_tolerance,
-            angle_tolerance,
-        )
+        result = _analyze_chain(tree, base, tip, position_tolerance, angle_tolerance)
         if result.is_srs:
             matches.append(result)
     return tuple(matches)
@@ -546,7 +559,7 @@ def scan_urdf(
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("urdf", type=Path)
+    parser.add_argument("urdf", type=Path, help="path to a URDF XML file")
     parser.add_argument(
         "--base", help="base link or scan root (defaults to the URDF root)"
     )
@@ -558,10 +571,18 @@ def main(argv=None):
         "--scan", action="store_true", help="find S-R-S chains in a subtree"
     )
     parser.add_argument(
-        "--position-tolerance", type=float, default=1e-6, metavar="METRES"
+        "--position-tolerance",
+        type=float,
+        default=1e-6,
+        metavar="METRES",
+        help="distance tolerance for axis intersection and fit (default: %(default)s)",
     )
     parser.add_argument(
-        "--angle-tolerance", type=float, default=1e-6, metavar="RADIANS"
+        "--angle-tolerance",
+        type=float,
+        default=1e-6,
+        metavar="RADIANS",
+        help="angle tolerance for axis geometry and fit (default: %(default)s)",
     )
     args = parser.parse_args(argv)
     options = {
@@ -578,10 +599,11 @@ def main(argv=None):
             result = analyze_urdf(args.urdf, tip_link=args.tip, **options)
             report = result.to_dict()
             compatible = result.solver_compatible
+        output = json.dumps(report, indent=2, allow_nan=False)
     except (OSError, ElementTree.ParseError, ValueError) as exc:
         print(f"{parser.prog}: {exc}", file=sys.stderr)
         return 2
-    print(json.dumps(report, indent=2, allow_nan=False))
+    print(output)
     return 0 if compatible else 1
 
 

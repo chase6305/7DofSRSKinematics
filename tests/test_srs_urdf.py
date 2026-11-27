@@ -170,6 +170,7 @@ def test_report_noncanonical_and_unsupported_chains(
 def test_cli_outputs_json_and_reports_error_status(capsys):
     assert main([str(URDF), "--tip", "link_ee"]) == 0
     report = json.loads(capsys.readouterr().out)
+    assert report == analyze_urdf(URDF, tip_link="link_ee").to_dict()
     assert report["is_srs"] and report["solver_compatible"]
     assert report["parameters"]["link_lengths"] == pytest.approx(
         [0.34, 0.4, 0.4, 0.126]
@@ -355,3 +356,32 @@ def test_urdf_12_requires_both_revolute_position_limits(tmp_path):
     modern = analyze_urdf(_write_robot(tmp_path, robot))
     assert modern.solver_compatible
     assert modern.parameters.joint_limits[1][0] == -1.0
+
+
+def test_parallel_shoulder_axes_have_no_unique_center(tmp_path):
+    robot = ET.parse(URDF).getroot()
+    robot.find("joint[@name='joint_2']/axis").set("xyz", "0 1 0")
+    result = analyze_urdf(_write_robot(tmp_path, robot))
+    assert not result.is_srs
+    assert result.shoulder_center is None
+    assert "parallel adjacent axes" in result.reason
+
+
+@pytest.mark.parametrize(
+    "change, diagnostic",
+    [
+        ("missing_axis_xyz", "Missing xyz in axis"),
+        ("overflow", "Could not compute finite joint geometry"),
+    ],
+)
+def test_cli_reports_invalid_joint_coordinates(tmp_path, capsys, change, diagnostic):
+    robot = ET.parse(URDF).getroot()
+    if change == "missing_axis_xyz":
+        robot.find("joint[@name='joint_1']/axis").attrib.clear()
+    else:
+        for joint in robot.findall("joint")[:2]:
+            joint.find("origin").set("xyz", "0 0 1.7e308")
+    assert main([str(_write_robot(tmp_path, robot))]) == 2
+    captured = capsys.readouterr()
+    assert not captured.out
+    assert diagnostic in captured.err

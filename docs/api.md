@@ -60,6 +60,7 @@ The command defaults to the URDF root and the sole leaf below the selected base.
 Specify the tip explicitly when that subtree has multiple leaves. The tool accepts
 URDF XML with fixed joints, independent revolute joints and continuous joints on
 the selected path. It uses joint origins and axes, so mesh files are optional.
+Expand Xacro macros before passing an XML file to the tool.
 `--position-tolerance` and `--angle-tolerance` default to `1e-6` metres and radians.
 
 Joint origins accept `rpy` for URDF 1.0 through 1.2, or `quat_xyzw` for
