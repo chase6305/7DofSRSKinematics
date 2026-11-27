@@ -265,7 +265,14 @@ def test_scan_finds_both_arms_below_movable_mounts_and_skips_gripper_joints(tmp_
                 element.set("link", f"{side}_{element.get('link')}")
             robot.append(joint)
         _fixed_joint(robot, f"{side}_mount", "carriage", f"{side}_link_0", f"{x} 0 0")
-    _fixed_joint(robot, "wrist_camera", "left_link_7", "left_camera")
+    _fixed_joint(
+        robot,
+        "wrist_camera",
+        "left_link_7",
+        "left_camera",
+        xyz="0.05 -0.02 -0.018",
+        rpy="0.4 -0.3 0.2",
+    )
 
     path = _write_robot(tmp_path, robot)
     matches = scan_urdf(path)
@@ -281,6 +288,21 @@ def test_scan_finds_both_arms_below_movable_mounts_and_skips_gripper_joints(tmp_
     actual = left.make_solver().get_fk(left.parameters.to_solver_joints(q))
     expected = _yaw_pose(0, [0.3, 0, 0]) @ KUKAiiwaSolver().get_fk(q)
     np.testing.assert_allclose(actual, expected, atol=1e-12, rtol=0)
+    for match in matches:
+        direct = analyze_urdf(path, base_link=match.base_link, tip_link=match.tip_link)
+        np.testing.assert_allclose(
+            match.parameters.dh_params, direct.parameters.dh_params, atol=1e-12, rtol=0
+        )
+        np.testing.assert_allclose(
+            match.parameters.flange_to_tip,
+            direct.parameters.flange_to_tip,
+            atol=1e-12,
+            rtol=0,
+        )
+        position, rotation = match.compare_fk(q)
+        assert position < 1e-12 and rotation < 1e-12
+    matches[0].parameters.joint_zero[0] = 1.0
+    assert matches[1].parameters.joint_zero[0] == 0.0
 
     matches = scan_urdf(path, base_link="left_link_0")
     assert [(r.base_link, r.tip_link) for r in matches] == [

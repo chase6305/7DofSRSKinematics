@@ -4,6 +4,7 @@ import argparse
 import json
 import re
 import sys
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional, Tuple, Union
@@ -240,7 +241,7 @@ class _URDFTree:
             frames.append(self._frames[joint])
         return frames
 
-    def _fixed_tips(self, link):
+    def fixed_tips(self, link):
         stack = [link]
         while stack:
             current = stack.pop()
@@ -254,7 +255,7 @@ class _URDFTree:
                 yield current
             stack.extend(fixed)
 
-    def rotary_paths(self, base):
+    def rotary_windows(self, base):
         # Track the base of each of the last seven contiguous rotary joints.
         # The start of a fixed segment is immediately below the previous joint.
         stack = [(base, base, ())]
@@ -271,8 +272,7 @@ class _URDFTree:
                     else ()
                 )
                 if len(rotary_bases) == 7:
-                    for tip in self._fixed_tips(child):
-                        yield rotary_bases[0], tip
+                    yield rotary_bases[0], child
                 stack.append((child, child, rotary_bases))
 
 
@@ -586,6 +586,30 @@ def analyze_urdf(
     return _analyze_chain(tree, base, tip, position_tolerance, angle_tolerance)
 
 
+def _with_fixed_tip(analysis, tree, tip):
+    if tip == analysis.tip_link:
+        return analysis
+    result = deepcopy(analysis)
+    result.tip_link = tip
+    params = result.parameters
+    if params is not None:
+        frames = tree.frames(tree.chain(analysis.tip_link, tip))
+        try:
+            with np.errstate(over="raise", invalid="raise"):
+                _, _, offset = _chain_state(frames, capture_axes=False)
+                # Move the canonical flange along J7 by the added axial offset.
+                axial = params.flange_to_tip[2, :3] @ offset[:3, 3]
+                params.link_lengths[-1] += axial
+                params.dh_params[-1, 0] = params.link_lengths[-1]
+                params.flange_to_tip = params.flange_to_tip @ offset
+                params.flange_to_tip[2, 3] -= axial
+        except FloatingPointError as exc:
+            raise ValueError(
+                f"Could not compute a finite tool transform to {tip!r}"
+            ) from exc
+    return result
+
+
 def scan_urdf(
     urdf_path: Union[str, Path],
     *,
@@ -597,11 +621,16 @@ def scan_urdf(
     _validate_tolerances(position_tolerance, angle_tolerance)
     tree = _URDFTree(urdf_path)
     matches = []
-    for base, tip in sorted(tree.rotary_paths(tree.base(base_link))):
-        result = _analyze_chain(tree, base, tip, position_tolerance, angle_tolerance)
+    for base, last_rotary_link in tree.rotary_windows(tree.base(base_link)):
+        result = _analyze_chain(
+            tree, base, last_rotary_link, position_tolerance, angle_tolerance
+        )
         if result.is_srs:
-            matches.append(result)
-    return tuple(matches)
+            matches.extend(
+                _with_fixed_tip(result, tree, tip)
+                for tip in tree.fixed_tips(last_rotary_link)
+            )
+    return tuple(sorted(matches, key=lambda match: (match.base_link, match.tip_link)))
 
 
 def _cli_report(analysis, check_fk):
