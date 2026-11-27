@@ -129,9 +129,9 @@ class SRSAnalysis:
             )
         frames = _joint_frames(chain, tree.version)
 
-        reference = np.empty((len(mapped), 4, 4))
-        for index, q in enumerate(joints.reshape(-1, 7)):
-            _, _, reference[index] = _chain_state(frames, q)
+        _, _, reference = _chain_state(
+            frames, joints.reshape(-1, 7), capture_axes=False
+        )
         delta = solver.get_fk(mapped) - reference
         position = np.linalg.norm(delta[:, :3, 3], axis=1)
         distance = np.linalg.norm(delta[:, :3, :3], axis=(1, 2))
@@ -326,26 +326,34 @@ def _joint_frames(chain, version):
     return frames
 
 
-def _chain_state(frames, angles):
-    """Express the axis lines and tip pose in the selected base frame."""
+def _chain_state(frames, angles=None, *, capture_axes=True):
+    """Express the tip pose and optional axis lines in the selected base frame."""
     pose = np.eye(4)
+    if angles is not None:
+        pose = np.broadcast_to(pose, angles.shape[:-1] + (4, 4))
+    identity = np.eye(3)
     points, axes = [], []
-    angles = iter(angles)
+    index = 0
     for origin, axis in frames:
         pose = pose @ origin
         if axis is None:
             continue
-        points.append(pose[:3, 3].copy())
-        axes.append(pose[:3, :3] @ axis)
-        angle = next(angles)
-        cosine, sine = np.cos(angle), np.sin(angle)
-        rotation = (
-            cosine * np.eye(3)
-            + (1.0 - cosine) * np.outer(axis, axis)
-            + sine * SRSAnalyticalSolver.skew(axis)
-        )
-        pose[:3, :3] = pose[:3, :3] @ rotation
-    return np.array(points), np.array(axes), pose
+        if capture_axes:
+            points.append(pose[..., :3, 3].copy())
+            axes.append(pose[..., :3, :3] @ axis)
+        if angles is not None:
+            angle = angles[..., index][..., None, None]
+            cosine, sine = np.cos(angle), np.sin(angle)
+            rotation = (
+                cosine * identity
+                + (1.0 - cosine) * np.outer(axis, axis)
+                + sine * SRSAnalyticalSolver.skew(axis)
+            )
+            pose[..., :3, :3] = pose[..., :3, :3] @ rotation
+        index += 1
+    if capture_axes:
+        return np.array(points), np.array(axes), pose
+    return None, None, pose
 
 
 def _axis_center(points, axes):
@@ -486,7 +494,7 @@ def _analyze_chain(tree, base, tip, position_tolerance, angle_tolerance):
 
 
 def _fit_geometry(result, frames, limits, position_tolerance, angle_tolerance):
-    points, axes, _ = _chain_state(frames, np.zeros(7))
+    points, axes, _ = _chain_state(frames)
     angular_threshold = np.sin(angle_tolerance)
     pairs = np.array([0, 1, 4, 5])
     for name, triplet in (

@@ -130,6 +130,11 @@ def test_extract_with_arbitrary_joint_frames_and_reference_angles(tmp_path):
     mapped = params.to_solver_joints(q)
     np.testing.assert_allclose(params.to_urdf_joints(mapped), q, atol=1e-12)
     np.testing.assert_allclose(solver.get_fk(mapped), expected, atol=1e-12, rtol=0)
+    position, angle = analysis.compare_fk(q[::2])
+    assert position.shape == angle.shape == (10,)
+    assert position.max() < 1e-12 and angle.max() < 1e-12
+    position, angle = analysis.compare_fk(q[:0])
+    assert position.shape == angle.shape == (0,)
     branch = solver.get_configuration(mapped[0])
     ok, solved = solver.solve_configuration(expected[0], branch, mapped[0] + 0.03)
     assert ok
