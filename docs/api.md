@@ -49,3 +49,113 @@ validation are batched.
 Joint-distance weights are normalized before ranking: multiplying all weights
 by the same positive finite factor does not change the selected solution.
 Zero weights retain deterministic input ordering for tied candidates.
+
+## S-R-S recognition from URDF
+
+```bash
+srs-identify robot.urdf --base base_link --tip tool_link
+```
+
+The command defaults to the URDF root and the sole leaf below the selected base.
+Specify the tip explicitly when that subtree has multiple leaves. The tool accepts
+URDF XML with fixed joints, independent revolute joints and continuous joints on
+the selected path. It uses joint origins and axes, so mesh files are optional.
+Expand Xacro macros before passing an XML file to the tool.
+`--position-tolerance` and `--angle-tolerance` default to `1e-6` metres and radians.
+
+Joint origins accept `rpy` for URDF 1.0 through 1.2, or `quat_xyzw` for
+URDF 1.1 and 1.2. A joint origin must specify at most one rotation representation.
+URDF 1.2 requires explicit lower and upper bounds on revolute joints.
+[URDF version reference](https://github.com/ros/urdfdom/tree/rolling#urdf-versioning)
+
+The report sets `is_srs` when the seven rotary joints form two groups of three
+intersecting, nondegenerate axes with a rotary elbow between them. Shoulder and
+wrist errors are the maximum distances from their least-squares centers to the
+corresponding axes. The elbow center is the projection of the shoulder onto J4.
+Centers and the directed `elbow_axis` are expressed in the selected base frame
+at URDF joint zero. Geometric matches also include `upper_arm_length` and
+`forearm_length` in metres, measured from shoulder to elbow and elbow to wrist.
+
+`solver_compatible` requires adjacent orthogonal axes in the shoulder and wrist,
+J4 perpendicular to J3 and J5, and upper-arm and forearm segments along J3 and
+J5 that are longer than the position tolerance. For compatible models,
+`parameters` contains standard DH rows
+`[d, alpha, a, theta]`, lengths `[d_bs, d_se, d_ew, d_wt]`, and the
+`base_to_solver` and `flange_to_tip` homogeneous transforms. The base origin is
+projected onto J1 and the tip offset along J7 is included in `d_wt`. Tolerances
+bound the inferred geometry and the fit of all seven axes at the extracted
+solver reference pose. `joint_axis_position_errors` measures the distance from
+each canonical joint center to its corresponding URDF axis in metres.
+`joint_axis_angle_errors` measures the unsigned angle between each pair of axes
+in radians. Both list values in chain order when a canonical fit is attempted.
+They describe the fitted model at that reference pose. Cartesian tip errors can
+accumulate across multiple moving joints.
+
+For external FK, compose `base_to_solver @ product_of_dh_matrices @ flange_to_tip`.
+The result is the pose of the selected URDF tip in the selected URDF base.
+
+`joint_limits` lists URDF bounds in chain order, with `[null, null]` for
+continuous joints. The command exits with status 0 with extracted parameters, 1 when
+parameters are unavailable, or 2 for invalid input (diagnostic on stderr).
+
+```python
+import numpy as np
+from srs_kinematics import analyze_urdf
+
+analysis = analyze_urdf("urdf/iiwa_7.urdf", tip_link="link_ee")
+solver = analysis.make_solver()
+parameters = analysis.parameters
+q_urdf = np.array([0.3, -0.5, 0.7, 1.0, -0.4, 0.8, -0.2])
+q_solver = parameters.to_solver_joints(q_urdf)
+target = solver.get_fk(q_solver)
+ok, solution = solver.get_ik(target, q_solver + 0.05)
+if ok:
+    print(dict(zip(analysis.joint_names, parameters.to_urdf_joints(solution))))
+```
+
+The coordinate mapping is `q_solver = joint_signs * (q_urdf - joint_zero)`.
+Both mapping methods accept arrays whose last dimension is 7. Use solver
+coordinates with FK, IK and branch APIs. FK returns the selected tip pose in the
+selected URDF base frame. `make_solver()` raises `ValueError` with the analysis
+reason when parameters are unavailable.
+`analysis.to_dict()` produces the same report structure as the CLI.
+
+### Compare extracted and URDF forward kinematics
+
+```bash
+srs-identify robot.urdf --tip tool_link --check-fk
+```
+
+For each compatible chain, `--check-fk` adds an `fk_check` object with the sample
+count, maximum position error in metres, and maximum rotation error in radians.
+It uses 32 deterministic samples over the URDF position bounds, with one turn
+from `-π` to `π` for continuous joints. The errors measure the sampled tip poses
+and the exit status continues to report solver compatibility.
+
+For custom positions, `analysis.compare_fk(q_urdf)` reads the source URDF and
+returns position and rotation errors with the leading shape of `q_urdf`.
+
+### Discover arms in a larger URDF
+
+```bash
+srs-identify robot.urdf --scan
+srs-identify robot.urdf --scan --base torso --check-fk
+srs-identify robot.urdf --scan --include-rejected
+```
+
+Scan mode considers windows of seven consecutive independent rotary joints,
+allowing fixed joints between them. Each result starts at the beginning of the
+fixed segment that mounts J1. Tips follow fixed attachments down to leaf links
+or links that mount another movable joint, such as a gripper. Results are sorted
+by base and tip, so multiple fixed tool frames can produce several results for
+the same seven joints.
+
+The JSON object has a `chains` array containing all geometric S-R-S matches,
+including matches rejected by the solver. Exit status 0 indicates at least one
+compatible match. Status 1 covers both an empty array and matches without
+extractable parameters. In Python, `scan_urdf(path, base_link=None)` returns
+the same matches as a tuple of `SRSAnalysis` objects.
+
+To diagnose an empty scan, add `--include-rejected` or pass
+`include_rejected=True` to the Python API. Each seven-joint window that fails
+the geometric checks then includes its reason and available residuals.

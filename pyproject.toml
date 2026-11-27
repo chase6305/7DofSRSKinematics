@@ -22,6 +22,7 @@ test = ["pytest>=7"]
 visualization = ["viser==1.0.24", "yourdfpy>=0.0.60", "trimesh>=4.0"]
 
 [project.scripts]
+srs-identify = "srs_urdf:main"
 srs-viser-lab = "srs_viser.app:main"
 
 [tool.setuptools]
@@ -31,6 +32,7 @@ py-modules = [
     "srs_analytical_solver",
     "kuka_iiwa_solver",
     "srs_kinematics",
+    "srs_urdf",
 ]
 packages = ["srs_kinematics_assets", "srs_viser"]
 package-dir = {"" = "src", "srs_kinematics_assets" = "urdf"}
