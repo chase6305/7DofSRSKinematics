@@ -62,6 +62,9 @@ class SRSAnalysis:
     parameters: Optional[SRSParameters] = None
     joint_axis_position_errors: Optional[np.ndarray] = None
     joint_axis_angle_errors: Optional[np.ndarray] = None
+    elbow_axis: Optional[np.ndarray] = None
+    upper_arm_length: Optional[float] = None
+    forearm_length: Optional[float] = None
 
     @property
     def solver_compatible(self):
@@ -512,8 +515,11 @@ def _fit_geometry(result, frames, limits, position_tolerance, angle_tolerance):
     shoulder, wrist, elbow_axis = result.shoulder_center, result.wrist_center, axes[3]
     elbow = points[3] + ((shoulder - points[3]) @ elbow_axis) * elbow_axis
     result.elbow_center = elbow
+    result.elbow_axis = elbow_axis.copy()
     upper, forearm = elbow - shoulder, wrist - elbow
-    if min(np.linalg.norm(upper), np.linalg.norm(forearm)) <= position_tolerance:
+    result.upper_arm_length = float(np.linalg.norm(upper))
+    result.forearm_length = float(np.linalg.norm(forearm))
+    if min(result.upper_arm_length, result.forearm_length) <= position_tolerance:
         result.reason = "The upper arm and forearm must have nonzero lengths"
     elif np.any(
         np.abs(np.sum(axes[pairs] * axes[pairs + 1], axis=1)) > angular_threshold

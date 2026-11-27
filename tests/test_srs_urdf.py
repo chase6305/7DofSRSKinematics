@@ -163,6 +163,10 @@ def test_report_noncanonical_and_unsupported_chains(
     assert analysis.is_srs is expected_srs
     assert not analysis.solver_compatible
     assert reason in analysis.reason
+    if expected_srs:
+        assert analysis.upper_arm_length == pytest.approx(0.4)
+        assert analysis.forearm_length == pytest.approx(0.4)
+        np.testing.assert_allclose(analysis.elbow_axis, [0, -1, 0], atol=1e-12)
     with pytest.raises(ValueError, match=reason):
         analysis.make_solver()
 

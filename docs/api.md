@@ -66,17 +66,20 @@ Expand Xacro macros before passing an XML file to the tool.
 Joint origins accept `rpy` for URDF 1.0 through 1.2, or `quat_xyzw` for
 URDF 1.1 and 1.2. A joint origin must specify at most one rotation representation.
 URDF 1.2 requires explicit lower and upper bounds on revolute joints.
-[URDF version reference](https://github.com/ros/urdfdom/tree/rolling#urdf-specification)
+[URDF version reference](https://github.com/ros/urdfdom/tree/rolling#urdf-versioning)
 
 The report sets `is_srs` when the seven rotary joints form two groups of three
 intersecting, nondegenerate axes with a rotary elbow between them. Shoulder and
 wrist errors are the maximum distances from their least-squares centers to the
 corresponding axes. The elbow center is the projection of the shoulder onto J4.
-Centers are expressed in the selected base frame at URDF joint zero.
+Centers and the directed `elbow_axis` are expressed in the selected base frame
+at URDF joint zero. Geometric matches also include `upper_arm_length` and
+`forearm_length` in metres, measured from shoulder to elbow and elbow to wrist.
 
 `solver_compatible` requires adjacent orthogonal axes in the shoulder and wrist,
-J4 perpendicular to J3 and J5, and nonzero upper-arm and forearm segments along
-J3 and J5. For compatible models, `parameters` contains standard DH rows
+J4 perpendicular to J3 and J5, and upper-arm and forearm segments along J3 and
+J5 that are longer than the position tolerance. For compatible models,
+`parameters` contains standard DH rows
 `[d, alpha, a, theta]`, lengths `[d_bs, d_se, d_ew, d_wt]`, and the
 `base_to_solver` and `flange_to_tip` homogeneous transforms. The base origin is
 projected onto J1 and the tip offset along J7 is included in `d_wt`. Tolerances
@@ -87,6 +90,9 @@ each canonical joint center to its corresponding URDF axis in metres.
 in radians. Both list values in chain order when a canonical fit is attempted.
 They describe the fitted model at that reference pose. Cartesian tip errors can
 accumulate across multiple moving joints.
+
+For external FK, compose `base_to_solver @ product_of_dh_matrices @ flange_to_tip`.
+The result is the pose of the selected URDF tip in the selected URDF base.
 
 `joint_limits` lists URDF bounds in chain order, with `[null, null]` for
 continuous joints. The command exits with status 0 with extracted parameters, 1 when
